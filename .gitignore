@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# Playwright browser profile (chứa session/cookie Facebook)
+facebook-block-tool/fb_profile/
+
+# Debug screenshots
+facebook-block-tool/debug_*.png
+
+# Logs
+facebook-block-tool/log-*.txt
+
+# Keywords (có thể chứa thông tin nhạy cảm)
+Anti.txt
+
+# OS
+.DS_Store
