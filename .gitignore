@@ -9,10 +9,10 @@ venv/
 facebook-block-tool/fb_profile/
 
 # Debug screenshots
-facebook-block-tool/debug_*.png
+facebook-block-tool/debug/
 
 # Logs
-facebook-block-tool/log-*.txt
+facebook-block-tool/logs/
 
 # Keywords (có thể chứa thông tin nhạy cảm)
 Anti.txt
