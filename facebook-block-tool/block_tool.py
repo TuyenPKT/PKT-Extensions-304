@@ -6,6 +6,7 @@ Usage: python block_tool.py keywords.txt [delay_giây]
 """
 
 import asyncio
+import random
 import re as _re
 import sys
 import unicodedata
@@ -64,11 +65,32 @@ def name_matches(name: str, match_pattern: str) -> bool:
 
 # ── Auto-detect gambling/scam ──────────────────────────────────────────────────
 
+_LOOKALIKE = str.maketrans({
+    # Cyrillic → Latin
+    'А':'A','В':'B','С':'C','Е':'E','Н':'H','І':'I','К':'K','М':'M',
+    'О':'O','Р':'P','Ѕ':'S','Т':'T','Х':'X','Ү':'Y','Ѡ':'W',
+    'а':'a','с':'c','е':'e','о':'o','р':'p','х':'x','і':'i',
+    'Ԁ':'D','ԁ':'d','п':'n','н':'h','һ':'h','ʜ':'H',
+    # Latin small capitals / IPA
+    'ᴀ':'a','ʙ':'b','ᴄ':'c','ᴅ':'d','ᴇ':'e','ꜰ':'f','ɢ':'g',
+    'ɪ':'i','ᴊ':'j','ᴋ':'k','ʟ':'l','ᴍ':'m','ɴ':'n','ᴏ':'o',
+    'ᴘ':'p','ʀ':'r','ꜱ':'s','ᴛ':'t','ᴜ':'u','ᴠ':'v','ᴡ':'w',
+    'ʏ':'y','ᴢ':'z',
+    # Greek
+    'α':'a','β':'b','ε':'e','ι':'i','κ':'k','ο':'o',
+    'ρ':'p','τ':'t','υ':'u','χ':'x','ω':'w',
+    # Fullwidth digits
+    '０':'0','１':'1','２':'2','３':'3','４':'4',
+    '５':'5','６':'6','７':'7','８':'8','９':'9',
+})
+
+
 def _strip_diacritics(s: str) -> str:
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
 
 def _normalize_detect(s: str) -> str:
+    s = s.translate(_LOOKALIKE)
     s = _strip_diacritics(s).lower()
     s = _re.sub(r'[^a-z0-9\s]', ' ', s)
     return _re.sub(r'\s+', ' ', s).strip()
@@ -87,16 +109,122 @@ _GAMBLING_PATTERNS = [
     _re.compile(r'\b\w{2,10}\d{2,3}\.(com|net|vip|cc|io)\b'),
 ]
 
+# Build ASCII → {unicode variants} từ _LOOKALIKE (đảo ngược map)
+def _build_char_classes():
+    from collections import defaultdict
+    inv = defaultdict(set)
+    for codepoint, asc in _LOOKALIKE.items():
+        inv[asc.lower()].add(chr(codepoint))
+    return dict(inv)
+
+_CHAR_VARIANTS = _build_char_classes()
+
+
+def keyword_to_variant_regex(kw: str) -> _re.Pattern:
+    """'SHBET' → [ЅS][НʜH][ВB][ЕE][ТT] — match mọi biến thể Unicode."""
+    def char_class(ch):
+        ch_l = ch.lower()
+        variants = _CHAR_VARIANTS.get(ch_l, set()) | {ch_l, ch_l.upper()}
+        if len(variants) == 1:
+            return _re.escape(ch_l)
+        def esc(c):
+            return ('\\' + c) if c in r']\^-' else c
+        return '[' + ''.join(esc(c) for c in sorted(variants)) + ']'
+    return _re.compile(''.join(char_class(c) for c in kw), _re.IGNORECASE)
+
+
+# Pre-build variant regex cho mỗi blacklist term
+_BLACKLIST_REGEXES = [keyword_to_variant_regex(t) for t in _GAMBLING_BLACKLIST]
+
 
 def is_gambling(name: str) -> bool:
+    # 1. Normalize rồi check blacklist + patterns
     n = _normalize_detect(name)
     if any(term in n for term in _GAMBLING_BLACKLIST):
         return True
-    return any(pat.search(n) for pat in _GAMBLING_PATTERNS)
+    if any(pat.search(n) for pat in _GAMBLING_PATTERNS):
+        return True
+    # 2. Check raw name bằng variant regex (bắt obfuscation chưa có trong _LOOKALIKE)
+    return any(rx.search(name) for rx in _BLACKLIST_REGEXES)
 
 
 def should_block(name: str, match_pattern: str) -> bool:
     return name_matches(name, match_pattern) or is_gambling(name)
+
+
+# ── Auto-expand Anti.txt với Unicode variants ──────────────────────────────────
+
+# Ký tự lookalike "chuẩn" hay dùng nhất — ưu tiên dạng này khi generate variant
+_PREFERRED_LOOKALIKE: dict[str, str] = {
+    's': 'Ѕ', 'h': 'ʜ', 'b': 'в', 'e': 'е', 't': 'т',
+    'a': 'а', 'c': 'с', 'o': 'о', 'p': 'р', 'i': 'і',
+    'n': 'п', 'x': 'х', 'm': 'ᴍ', 'w': 'ᴡ', 'v': 'ᴠ',
+    'k': 'κ', 'u': 'υ',
+}
+
+
+def _primary_lookalike_char(ch: str) -> str:
+    preferred = _PREFERRED_LOOKALIKE.get(ch.lower())
+    if preferred:
+        return preferred.upper() if ch.isupper() and preferred.upper() != preferred else preferred
+    variants = _CHAR_VARIANTS.get(ch.lower(), set())
+    if not variants:
+        return ch
+    return sorted(variants)[0]
+
+
+def generate_variants(kw: str) -> list[str]:
+    """Tạo các biến thể Unicode + không dấu cho keyword 1-2 từ."""
+    words = nfc(kw).split()
+    if len(words) > 2:
+        return []
+
+    result = []
+
+    # 1. Bỏ dấu tiếng Việt
+    plain = _strip_diacritics(kw)
+    if plain.lower() != kw.lower():
+        result.append(plain)
+
+    # 2. Thay mỗi ký tự bằng Unicode lookalike chính
+    lookalike = ''.join(
+        _primary_lookalike_char(c) if c.isalpha() else c
+        for c in kw
+    )
+    if lookalike.lower() != kw.lower():
+        result.append(lookalike)
+
+    # 3. Bỏ dấu rồi thay lookalike (bắt dạng "mien phi" + Cyrillic)
+    lk_plain = ''.join(
+        _primary_lookalike_char(c) if c.isalpha() else c
+        for c in plain
+    )
+    seen = {r.lower() for r in result} | {kw.lower()}
+    if lk_plain.lower() not in seen:
+        result.append(lk_plain)
+
+    return result
+
+
+def expand_keyword_file(kw_path: Path) -> list[str]:
+    """Đọc file, bổ sung variant còn thiếu cho keyword 1-2 từ, ghi lại."""
+    lines = [l.strip() for l in kw_path.read_text(encoding='utf-8').splitlines() if l.strip()]
+    existing_lower = {l.lower() for l in lines}
+
+    new_lines: list[str] = []
+    for line in lines:
+        search_kw, _ = split_line(line)
+        for variant in generate_variants(search_kw):
+            if variant.lower() not in existing_lower:
+                new_lines.append(variant)
+                existing_lower.add(variant.lower())
+                print(f'  [expand] +"{variant}"  ←  "{search_kw}"')
+
+    if new_lines:
+        kw_path.write_text('\n'.join(lines + new_lines) + '\n', encoding='utf-8')
+        print(f'  [expand] Đã thêm {len(new_lines)} variant vào {kw_path.name}')
+
+    return lines + new_lines
 
 
 def _clean_profile_url(href: str):
@@ -234,7 +362,7 @@ async def main(keyword_file: str, delay: int):
         print(f'Không tìm thấy file: {keyword_file}')
         return
 
-    keywords = [l.strip() for l in kw_path.read_text(encoding='utf-8').splitlines() if l.strip()]
+    keywords = expand_keyword_file(kw_path)
     if not keywords:
         print('File từ khoá rỗng.')
         return
@@ -261,16 +389,35 @@ async def main(keyword_file: str, delay: int):
 
         log(entries, 'info', f'Bắt đầu: {len(keywords)} từ khoá | delay={delay}s')
         blocked_total = skipped_total = 0
+        consecutive_errors = 0
+        BATCH_SIZE = 25
+        actions_in_batch = 0
+
+        async def check_rate_limited() -> bool:
+            content = await page.content()
+            return 'đã xảy ra lỗi' in content.lower() or 'checkpoint' in page.url
+
+        async def cooldown(minutes: int):
+            log(entries, 'info', f'Nghỉ cooldown {minutes} phút...')
+            await asyncio.sleep(minutes * 60)
+
+        async def human_pause():
+            # #4: delay sau mỗi navigation, không chỉ sau block
+            await asyncio.sleep(random.uniform(1.5, 4.0))
 
         for ki, line in enumerate(keywords):
             search_kw, match_pattern = split_line(line)
             log(entries, 'info', f'[{ki+1}/{len(keywords)}] Tìm: "{search_kw}" | lọc: "{match_pattern}"')
+
+            # #4: delay trước khi search
+            await human_pause()
 
             try:
                 await page.goto(
                     f'https://www.facebook.com/search/pages/?q={quote(search_kw)}',
                     wait_until='domcontentloaded', timeout=20000,
                 )
+                await human_pause()
                 profiles = await extract_profiles(page, match_pattern)
             except Exception as e:
                 log(entries, 'error', f'Lỗi search "{search_kw}": {e}')
@@ -279,17 +426,44 @@ async def main(keyword_file: str, delay: int):
             log(entries, 'info', f'Tìm thấy {len(profiles)} profile')
 
             for url in profiles:
+                # #5: quá nhiều lỗi liên tiếp → dừng
+                if consecutive_errors >= 5:
+                    log(entries, 'error', 'Quá nhiều lỗi liên tiếp — dừng.')
+                    break
+
                 result = await block_profile(page, url)
+
                 if result == 'blocked':
                     blocked_total += 1
+                    consecutive_errors = 0
+                    actions_in_batch += 1
                     log(entries, 'blocked', f'Đã chặn [{search_kw}] {url}')
                 else:
                     skipped_total += 1
+                    # #1: chỉ check rate-limit khi thất bại
+                    if result in ('session_expired', 'no_more_btn') and await check_rate_limited():
+                        log(entries, 'info', 'Phát hiện rate-limit — cooldown 25 phút.')
+                        await cooldown(random.randint(20, 30))
+                    if result in ('session_expired', 'no_more_btn'):
+                        consecutive_errors += 1
                     log(entries, 'skip', f'Bỏ qua [{search_kw}] {url} — {result}')
-                await asyncio.sleep(delay)
 
+                # #2: batch rest sau mỗi BATCH_SIZE lần block
+                if actions_in_batch >= BATCH_SIZE:
+                    rest = random.randint(5, 10)
+                    log(entries, 'info', f'Batch {BATCH_SIZE} xong — nghỉ {rest} phút.')
+                    await cooldown(rest)
+                    actions_in_batch = 0
+
+                # #4: delay đầy đủ giữa các profile
+                await asyncio.sleep(random.uniform(delay, delay + 10))
+
+            # #3: về home giữa các keyword, scroll nhẹ
             await page.goto('https://www.facebook.com', wait_until='domcontentloaded')
-            await asyncio.sleep(1)
+            await human_pause()
+            for _ in range(random.randint(1, 3)):
+                await page.keyboard.press('End')
+                await asyncio.sleep(random.uniform(0.8, 2.0))
 
         log(entries, 'info', f'Hoàn thành | Đã chặn: {blocked_total} | Bỏ qua: {skipped_total}')
         await ctx.close()
