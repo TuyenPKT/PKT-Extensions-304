@@ -2,18 +2,65 @@
 """
 PKT Facebook Block Tool
 Đọc file từ khoá → tìm người → chặn tự động
-Usage: python block_tool.py keywords.txt [delay_giây]
+Usage: python block_tool.py keywords.txt [pages|people] [delay_giây]
 """
 
 import asyncio
+import csv
+import platform
 import random
 import re as _re
+import subprocess
 import sys
+import time
 import unicodedata
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
-from playwright.async_api import async_playwright
+
+
+def _prompt_install(label: str, cmd: list[str]) -> None:
+    print(f'  Lệnh cài: {" ".join(cmd)}')
+    ans = input('  Tự động cài ngay? [y/N]: ').strip().lower()
+    if ans == 'y':
+        subprocess.check_call(cmd)
+        print(f'[setup] {label} đã cài xong.')
+    else:
+        sys.exit(f'Chạy thủ công rồi thử lại: {" ".join(cmd)}')
+
+
+def check_deps() -> None:
+    """Kiểm tra môi trường (Python, pip, playwright, chromium). Gợi ý cài nếu thiếu."""
+    if sys.version_info < (3, 9):
+        sys.exit(f'Cần Python ≥ 3.9 (hiện tại {sys.version_info.major}.{sys.version_info.minor})')
+
+    pip_ok = subprocess.run([sys.executable, '-m', 'pip', '--version'],
+                            capture_output=True).returncode == 0
+    if not pip_ok:
+        sys.exit('pip không khả dụng. Xem: https://pip.pypa.io/en/stable/installation/')
+
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        print('[setup] Thiếu thư viện playwright.')
+        _prompt_install('playwright', [sys.executable, '-m', 'pip', 'install', 'playwright'])
+        print('[setup] Cần cài trình duyệt — chạy lại lệnh gốc để tiếp tục.')
+        sys.exit(0)
+
+    # Kiểm tra Chromium binary đã được playwright install chưa
+    system = platform.system()
+    if system == 'Darwin':
+        base = Path.home() / 'Library' / 'Caches' / 'ms-playwright'
+    elif system == 'Windows':
+        import os
+        base = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'ms-playwright'
+    else:
+        base = Path.home() / '.cache' / 'ms-playwright'
+
+    if not any(base.glob('chromium-*')):
+        print('[setup] Chromium chưa được cài cho Playwright (~170 MB).')
+        _prompt_install('chromium', [sys.executable, '-m', 'playwright', 'install', 'chromium'])
+
 
 PROFILE_DIR = Path(__file__).parent / 'fb_profile'
 SKIP_PATHS = {
@@ -37,7 +84,15 @@ def nfc(s: str) -> str:
 
 
 def split_line(line: str) -> tuple[str, str]:
-    """'search_kw &@ match_pattern' → (search_kw, match_pattern). Không có &@ thì cả hai bằng nhau."""
+    """Tach search_kw va match_pattern.
+    &@  -> AND: tat ca cum double-quote phai co.
+    &&  -> AND+OR: search_kw phai co + it nhat 1 cum single-quote phai co.
+    """
+    if '&&' in line and '&@' not in line:
+        left, right = line.split('&&', 1)
+        kw = left.strip()
+        # Tự ghép search_kw vào match làm required term
+        return kw, f'"{kw}" {right.strip()}'
     if '&@' in line:
         left, right = line.split('&@', 1)
         return left.strip(), right.strip()
@@ -45,21 +100,29 @@ def split_line(line: str) -> tuple[str, str]:
 
 
 def parse_keyword(match_pattern: str):
-    """required: list cụm trong "" — ALL phải có trong tên.
-    fallback: set từ ≥3 ký tự — cần ≥2 khớp."""
-    p = match_pattern.replace('“', '"').replace('”', '"')
-    quoted = [nfc(m).lower() for m in _re.findall(r'"([^"]+)"', p)]
-    if quoted:
-        return quoted, set()
+    """required: cụm "" — ALL phải có.
+    optional: cụm '' — ít nhất 1 phải có.
+    fallback: từ ≥3 ký tự — cần ≥2 khớp."""
+    p = (match_pattern
+         .replace('\u201c', '"').replace('\u201d', '"')
+         .replace('\u2018', "'").replace('\u2019', "'"))
+    required = [nfc(m).lower() for m in _re.findall(r'"([^"]+)"', p)]
+    optional = [nfc(m).lower() for m in _re.findall(r"'([^']+)'", p)]
+    if required or optional:
+        return required, optional, set()
     words = {w.lower() for w in nfc(match_pattern).split() if len(w) >= 3}
-    return [], words
+    return [], [], words
 
 
 def name_matches(name: str, match_pattern: str) -> bool:
-    required, fallback = parse_keyword(match_pattern)
+    required, optional, fallback = parse_keyword(match_pattern)
     name_l = nfc(name).lower()
-    if required:
-        return all(term in name_l for term in required)
+    if required or optional:
+        if required and not all(t in name_l for t in required):
+            return False
+        if optional and not any(t in name_l for t in optional):
+            return False
+        return True
     return sum(1 for w in fallback if w in name_l) >= 2
 
 
@@ -137,18 +200,32 @@ def keyword_to_variant_regex(kw: str) -> _re.Pattern:
 _BLACKLIST_REGEXES = [keyword_to_variant_regex(t) for t in _GAMBLING_BLACKLIST]
 
 
-def is_gambling(name: str) -> bool:
-    # 1. Normalize rồi check blacklist + patterns
+def _gambling_signals(name: str) -> int:
+    """Đếm số signal gambling độc lập: blacklist-hit + pattern-hit (max 2)."""
     n = _normalize_detect(name)
-    if any(term in n for term in _GAMBLING_BLACKLIST):
-        return True
-    if any(pat.search(n) for pat in _GAMBLING_PATTERNS):
-        return True
-    # 2. Check raw name bằng variant regex (bắt obfuscation chưa có trong _LOOKALIKE)
-    return any(rx.search(name) for rx in _BLACKLIST_REGEXES)
+    blacklist_hit = (
+        any(term in n for term in _GAMBLING_BLACKLIST) or
+        any(rx.search(name) for rx in _BLACKLIST_REGEXES)
+    )
+    pattern_hit = any(pat.search(n) for pat in _GAMBLING_PATTERNS)
+    return int(blacklist_hit) + int(pattern_hit)
 
 
-def should_block(name: str, match_pattern: str) -> bool:
+def is_gambling(name: str) -> bool:
+    return _gambling_signals(name) >= 1
+
+
+def should_block(name: str, match_pattern: str, mode: str = 'pages') -> bool:
+    if mode == 'people':
+        required, optional, fallback = parse_keyword(match_pattern)
+        name_l = nfc(name).lower()
+        if required or optional:
+            req_ok = all(t in name_l for t in required) if required else True
+            opt_ok = any(t in name_l for t in optional) if optional else True
+            keyword_ok = req_ok and opt_ok and (len(required) + len(optional) >= 2)
+        else:
+            keyword_ok = sum(1 for w in fallback if w in name_l) >= 2
+        return keyword_ok or _gambling_signals(name) >= 2
     return name_matches(name, match_pattern) or is_gambling(name)
 
 
@@ -248,16 +325,20 @@ def _clean_profile_url(href: str):
         return None
 
 
-async def extract_profiles(page, match_pattern: str) -> list[str]:
+async def extract_profiles(page, match_pattern: str, mode: str = 'pages') -> list[str]:
     try:
         await page.wait_for_selector('[role="feed"]', timeout=15000)
     except Exception:
         await page.wait_for_selector('[role="main"]', timeout=10000)
-    await asyncio.sleep(3)
+    await asyncio.sleep(random.uniform(2.5, 4.5))
 
-    for _ in range(5):
-        await page.keyboard.press('End')
-        await asyncio.sleep(1.5)
+    for _ in range(random.randint(4, 7)):
+        dy = random.randint(280, 680)
+        await page.evaluate(f'window.scrollBy({{top:{dy},behavior:"smooth"}})')
+        await asyncio.sleep(random.uniform(0.9, 2.8))
+        if random.random() < 0.25:
+            await page.evaluate(f'window.scrollBy({{top:-{random.randint(60,200)},behavior:"smooth"}})')
+            await asyncio.sleep(random.uniform(0.5, 1.2))
 
     elements = await page.query_selector_all('[role="main"] a[href]')
     print(f'  [extract] anchors: {len(elements)}')
@@ -282,7 +363,7 @@ async def extract_profiles(page, match_pattern: str) -> list[str]:
     for p in pairs:
         print(f'    "{p["name"][:60]}" → {p["url"][:70]}')
 
-    return [p['url'] for p in pairs if should_block(p['name'], match_pattern)]
+    return [p['url'] for p in pairs if should_block(p['name'], match_pattern, mode)]
 
 
 async def block_profile(page, url: str) -> str:
@@ -354,7 +435,28 @@ async def block_profile(page, url: str) -> str:
         return str(e)[:80]
 
 
-async def main(keyword_file: str, delay: int):
+_SEARCH_URL = {
+    'pages':  'https://www.facebook.com/search/pages/?q={}',
+    'people': 'https://www.facebook.com/search/people/?q={}',
+}
+
+
+def _read_csv(path: Path) -> tuple[list[dict], list[str]]:
+    """Đọc CSV, trả về (rows, fieldnames). Bỏ qua dòng thiếu url."""
+    with open(path, newline='', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        rows = [r for r in reader if r.get('url', '').strip()]
+        return rows, list(reader.fieldnames or ['url', 'type', 'source', 'timestamp'])
+
+
+def _write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
+    with open(path, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+async def main(keyword_file: str, mode: str, delay: int):
     kw_path = Path(keyword_file)
     if not kw_path.exists():
         kw_path = Path(__file__).parent.parent / keyword_file
@@ -362,10 +464,11 @@ async def main(keyword_file: str, delay: int):
         print(f'Không tìm thấy file: {keyword_file}')
         return
 
-    keywords = expand_keyword_file(kw_path)
-    if not keywords:
-        print('File từ khoá rỗng.')
-        return
+    if mode != 'direct':
+        keywords = expand_keyword_file(kw_path)
+        if not keywords:
+            print('File từ khoá rỗng.')
+            return
 
     logs_dir = Path(__file__).parent / 'logs'
     logs_dir.mkdir(exist_ok=True)
@@ -376,8 +479,20 @@ async def main(keyword_file: str, delay: int):
         ctx = await p.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE_DIR),
             headless=False,
-            viewport={'width': 1280, 'height': 800},
-            args=['--disable-blink-features=AutomationControlled'],
+            viewport={'width': random.choice([1280, 1366, 1440, 1536]), 'height': random.choice([768, 800, 864, 900])},
+            user_agent=(
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            ),
+            locale='vi-VN',
+            timezone_id='Asia/Ho_Chi_Minh',
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--no-sandbox',
+            ],
+            ignore_default_args=['--enable-automation'],
         )
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
@@ -387,51 +502,223 @@ async def main(keyword_file: str, delay: int):
             log(entries, 'info', 'Chưa đăng nhập — đăng nhập xong nhấn Enter.')
             input()
 
-        log(entries, 'info', f'Bắt đầu: {len(keywords)} từ khoá | delay={delay}s')
+        if mode == 'direct':
+            log(entries, 'info', f'Direct mode: {kw_path.name}')
+        else:
+            log(entries, 'info', f'Bắt đầu: {len(keywords)} từ khoá | mode={mode} | delay={delay}s')
         blocked_total = skipped_total = 0
         consecutive_errors = 0
-        BATCH_SIZE = 25
         actions_in_batch = 0
+        batch_count = 0
+        profile_counter = 0  # đếm toàn bộ để xen scroll
 
-        async def check_rate_limited() -> bool:
-            content = await page.content()
-            return 'đã xảy ra lỗi' in content.lower() or 'checkpoint' in page.url
+        # Recovery state
+        recovery_mode  = False
+        recovery_start = 0.0
+        recovery_hits  = 0
+        _cooldown_min  = 15   # phút hiện tại (15→30→60→120→240)
+        RECOVERY_HOURS = 24
+
+        def _batch_size() -> int:
+            return random.randint(10, 15) if recovery_mode else random.randint(15, 20)
+
+        def _action_delay() -> float:
+            return random.uniform(5, 10) if recovery_mode else random.uniform(4, 8)
+
+        batch_size = _batch_size()
+
+        # LOW=0 MEDIUM=1 HIGH=2 CRITICAL=3
+        async def risk_level() -> int:
+            url = page.url
+            # CRITICAL: UI captcha thật
+            if await page.locator('[name="captcha"], iframe[src*="recaptcha"], [data-testid="captcha"]').count():
+                return 3
+            # HIGH: redirect vào checkpoint/challenge/login device
+            if any(k in url for k in ('/checkpoint/', '/challenge/', '/login/device', '/login/identify')):
+                return 2
+            # MEDIUM: redirect về login bất thường (không phải khởi động)
+            if 'login' in url and 'facebook.com' in url:
+                return 1
+            return 0
 
         async def cooldown(minutes: int):
-            log(entries, 'info', f'Nghỉ cooldown {minutes} phút...')
-            await asyncio.sleep(minutes * 60)
+            end = time.time() + minutes * 60
+            log(entries, 'info', f'Nghỉ {minutes} phút (đến {datetime.fromtimestamp(end).strftime("%H:%M:%S")})...')
+            try:
+                while True:
+                    left = end - time.time()
+                    if left <= 0:
+                        break
+                    await asyncio.sleep(min(60, left))
+                    left2 = end - time.time()
+                    if left2 > 0:
+                        log(entries, 'info', f'  còn {int(left2 // 60)}p{int(left2 % 60):02d}s...')
+            except asyncio.CancelledError:
+                raise
 
         async def human_pause():
-            # #4: delay sau mỗi navigation, không chỉ sau block
-            await asyncio.sleep(random.uniform(1.5, 4.0))
+            await asyncio.sleep(random.uniform(1.5, 3.5))
 
-        for ki, line in enumerate(keywords):
+        async def human_scroll():
+            try:
+                await page.goto('https://www.facebook.com', wait_until='domcontentloaded', timeout=15000)
+                await asyncio.sleep(random.uniform(1.8, 3.5))
+                for _ in range(random.randint(4, 9)):
+                    dy = random.randint(220, 720)
+                    await page.evaluate(f'window.scrollBy({{top:{dy},behavior:"smooth"}})')
+                    await asyncio.sleep(random.uniform(0.8, 3.2))
+                    if random.random() < 0.3:
+                        await page.evaluate(f'window.scrollBy({{top:-{random.randint(80,250)},behavior:"smooth"}})')
+                        await asyncio.sleep(random.uniform(0.6, 1.5))
+                await asyncio.sleep(random.uniform(1.5, 4.0))
+            except Exception:
+                pass
+
+        async def handle_risk(level: int) -> bool:
+            """level: 0=LOW 1=MEDIUM 2=HIGH 3=CRITICAL. Trả True = tiếp tục."""
+            nonlocal recovery_mode, recovery_start, recovery_hits, batch_size, _cooldown_min
+
+            if level == 0:
+                return True
+
+            if level == 1:  # MEDIUM: chậm lại, không cooldown dài
+                log(entries, 'warn', 'MEDIUM risk — redirect login bất thường, nghỉ 2–4 phút.')
+                await cooldown(random.randint(2, 4))
+                recovery_mode = True
+                batch_size = _batch_size()
+                return True
+
+            # HIGH hoặc CRITICAL — cooldown có cấp bậc
+            label = 'CRITICAL (captcha UI)' if level == 3 else 'HIGH (checkpoint/challenge)'
+
+            # Reset exponent nếu session trước đủ dài
+            if recovery_start > 0:
+                ran_minutes = (time.time() - recovery_start) / 60
+                if ran_minutes >= _cooldown_min:
+                    _cooldown_min = 15
+                    recovery_hits = 0
+
+            recovery_hits += 1
+            rest = _cooldown_min
+            _cooldown_min = min(_cooldown_min * 2, 240)
+
+            log(entries, 'warn',
+                f'{label} lần {recovery_hits} — cooldown {rest} phút '
+                f'(tiếp theo nếu bị nhanh: {_cooldown_min}p).')
+
+            await cooldown(rest)
+            recovery_mode = True
+            recovery_start = time.time()
+            batch_size = _batch_size()
+            return True
+
+        # ── Direct mode ───────────────────────────────────────────────────────
+        if mode == 'direct':
+            csv_rows, csv_fields = _read_csv(kw_path)
+
+            # Dedup theo url, giữ bản cuối cùng; đảo ngược để process từ dưới lên
+            seen_urls: dict[str, dict] = {}
+            for row in csv_rows:
+                seen_urls[row['url'].strip()] = row
+            queue = list(reversed(list(seen_urls.values())))
+            log(entries, 'info', f'{len(queue)} URL (từ dưới lên, đã dedup)')
+
+            stop_all = False
+            for row in queue:
+                if stop_all:
+                    break
+
+                rl = await risk_level()
+                if rl >= 1:
+                    await handle_risk(rl)
+                    if rl >= 2:
+                        break  # HIGH/CRITICAL: thoát vòng profile, resume sau cooldown
+
+                if consecutive_errors >= 5:
+                    log(entries, 'error', 'Quá nhiều lỗi liên tiếp — dừng.')
+                    break
+
+                url = row['url'].strip()
+                result = await block_profile(page, url)
+                profile_counter += 1
+
+                if result == 'blocked':
+                    blocked_total += 1
+                    consecutive_errors = 0
+                    actions_in_batch += 1
+                    log(entries, 'blocked', f'[direct] {url}')
+                    csv_rows = [r for r in csv_rows if r['url'].strip() != url]
+                    _write_csv(kw_path, csv_rows, csv_fields)
+                else:
+                    skipped_total += 1
+                    if result == 'session_expired':
+                        rl2 = await risk_level()
+                        if rl2 >= 2:
+                            await handle_risk(rl2)
+                            break
+                    if result in ('session_expired', 'no_more_btn'):
+                        consecutive_errors += 1
+                    log(entries, 'skip', f'[direct] {url} — {result}')
+
+                if actions_in_batch >= batch_size:
+                    batch_count += 1
+                    actions_in_batch = 0
+                    batch_size = _batch_size()
+                    if not recovery_mode and batch_count % random.randint(2, 3) == 0:
+                        rest = random.randint(15, 20)
+                        log(entries, 'info', f'Batch {batch_count} — nghỉ dài {rest} phút.')
+                    else:
+                        rest = random.randint(5, 10)
+                        log(entries, 'info', f'Batch {batch_count} xong — nghỉ {rest} phút.')
+                    await cooldown(rest)
+
+                scroll_every = 5 if recovery_mode else 10
+                if profile_counter % scroll_every == 0:
+                    await human_scroll()
+
+                await asyncio.sleep(_action_delay())
+
+        # ── Keyword search mode ───────────────────────────────────────────────
+        for ki, line in enumerate(keywords if mode != 'direct' else []):
+            # Kiểm tra hết window recovery (24h) → về nhịp bình thường
+            if recovery_mode and (time.time() - recovery_start) >= RECOVERY_HOURS * 3600:
+                recovery_mode = False
+                batch_size = _batch_size()
+                log(entries, 'info', 'Hết 24h recovery — về nhịp bình thường.')
+
             search_kw, match_pattern = split_line(line)
             log(entries, 'info', f'[{ki+1}/{len(keywords)}] Tìm: "{search_kw}" | lọc: "{match_pattern}"')
 
-            # #4: delay trước khi search
             await human_pause()
 
             try:
                 await page.goto(
-                    f'https://www.facebook.com/search/pages/?q={quote(search_kw)}',
+                    _SEARCH_URL[mode].format(quote(search_kw)),
                     wait_until='domcontentloaded', timeout=20000,
                 )
                 await human_pause()
-                profiles = await extract_profiles(page, match_pattern)
+                profiles = await extract_profiles(page, match_pattern, mode)
             except Exception as e:
                 log(entries, 'error', f'Lỗi search "{search_kw}": {e}')
                 continue
 
             log(entries, 'info', f'Tìm thấy {len(profiles)} profile')
 
+            stop_all = False
             for url in profiles:
-                # #5: quá nhiều lỗi liên tiếp → dừng
+                rl = await risk_level()
+                if rl >= 1:
+                    await handle_risk(rl)
+                    if rl >= 2:
+                        break
+
                 if consecutive_errors >= 5:
                     log(entries, 'error', 'Quá nhiều lỗi liên tiếp — dừng.')
+                    stop_all = True
                     break
 
                 result = await block_profile(page, url)
+                profile_counter += 1
 
                 if result == 'blocked':
                     blocked_total += 1
@@ -440,30 +727,47 @@ async def main(keyword_file: str, delay: int):
                     log(entries, 'blocked', f'Đã chặn [{search_kw}] {url}')
                 else:
                     skipped_total += 1
-                    # #1: chỉ check rate-limit khi thất bại
-                    if result in ('session_expired', 'no_more_btn') and await check_rate_limited():
-                        log(entries, 'info', 'Phát hiện rate-limit — cooldown 25 phút.')
-                        await cooldown(random.randint(20, 30))
+                    if result == 'session_expired':
+                        rl2 = await risk_level()
+                        if rl2 >= 2:
+                            await handle_risk(rl2)
+                            break
                     if result in ('session_expired', 'no_more_btn'):
                         consecutive_errors += 1
                     log(entries, 'skip', f'Bỏ qua [{search_kw}] {url} — {result}')
 
-                # #2: batch rest sau mỗi BATCH_SIZE lần block
-                if actions_in_batch >= BATCH_SIZE:
-                    rest = random.randint(5, 10)
-                    log(entries, 'info', f'Batch {BATCH_SIZE} xong — nghỉ {rest} phút.')
-                    await cooldown(rest)
+                if actions_in_batch >= batch_size:
+                    batch_count += 1
                     actions_in_batch = 0
+                    batch_size = _batch_size()
+                    if not recovery_mode and batch_count % random.randint(2, 3) == 0:
+                        rest = random.randint(15, 20)
+                        log(entries, 'info', f'Batch {batch_count} — nghỉ dài {rest} phút.')
+                    else:
+                        rest = random.randint(5, 10)
+                        log(entries, 'info', f'Batch {batch_count} xong — nghỉ {rest} phút.')
+                    await cooldown(rest)
 
-                # #4: delay đầy đủ giữa các profile
-                await asyncio.sleep(random.uniform(delay, delay + 10))
+                # Xen scroll sau mỗi ~5 profile khi recovery, ~10 khi bình thường
+                scroll_every = 5 if recovery_mode else 10
+                if profile_counter % scroll_every == 0:
+                    await human_scroll()
 
-            # #3: về home giữa các keyword, scroll nhẹ
+                await asyncio.sleep(_action_delay())
+
+            if stop_all:
+                break
+
+            # Về home giữa các keyword, scroll nhẹ
             await page.goto('https://www.facebook.com', wait_until='domcontentloaded')
             await human_pause()
-            for _ in range(random.randint(1, 3)):
-                await page.keyboard.press('End')
-                await asyncio.sleep(random.uniform(0.8, 2.0))
+            for _ in range(random.randint(2, 5)):
+                dy = random.randint(200, 600)
+                await page.evaluate(f'window.scrollBy({{top:{dy},behavior:"smooth"}})')
+                await asyncio.sleep(random.uniform(0.7, 2.2))
+                if random.random() < 0.2:
+                    await page.evaluate(f'window.scrollBy({{top:-{random.randint(50,180)},behavior:"smooth"}})')
+                    await asyncio.sleep(random.uniform(0.4, 1.0))
 
         log(entries, 'info', f'Hoàn thành | Đã chặn: {blocked_total} | Bỏ qua: {skipped_total}')
         await ctx.close()
@@ -480,7 +784,21 @@ async def main(keyword_file: str, delay: int):
 
 
 if __name__ == '__main__':
+    check_deps()
+    from playwright.async_api import async_playwright
     if len(sys.argv) < 2:
-        print('Usage: python block_tool.py keywords.txt [delay_giây]')
+        print('Usage: python block_tool.py keywords.txt [pages|people] [delay_giây]')
         sys.exit(1)
-    asyncio.run(main(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 3))
+
+    _mode = 'pages'
+    _delay = 3
+    for _a in sys.argv[2:]:
+        if _a in ('pages', 'people', 'direct'):
+            _mode = _a
+        elif _a.isdigit():
+            _delay = int(_a)
+
+    try:
+        asyncio.run(main(sys.argv[1], _mode, _delay))
+    except KeyboardInterrupt:
+        print('\n[dừng] Ctrl+C — đã thoát.')

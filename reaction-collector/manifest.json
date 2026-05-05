@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "PKT Reaction Collector",
+  "version": "1.0",
+  "description": "Thu link profile từ reactions Facebook để block",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.facebook.com/*"],
+  "content_scripts": [{
+    "matches": ["https://www.facebook.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PKT Reaction Collector"
+  }
+}

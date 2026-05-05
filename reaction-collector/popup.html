@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 300px; font: 14px/1.5 -apple-system, sans-serif; padding: 14px; background: #fff; }
+    h3   { font-size: 15px; margin-bottom: 12px; color: #050505; }
+
+    .stat { display: flex; justify-content: space-between; padding: 5px 0;
+            border-bottom: 1px solid #f0f2f5; }
+    .stat:last-of-type { border-bottom: none; }
+    .label { color: #65676b; }
+    .count { font-weight: 700; color: #1877f2; }
+
+    .section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e4e6e9; }
+    .section-title { font-size: 11px; font-weight: 600; color: #65676b;
+                     text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+    .dir-row { display: flex; align-items: center; gap: 6px; }
+    #dir-path { flex: 1; font-size: 12px; color: #050505; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+    #choose-dir { flex-shrink: 0; font-size: 11px; padding: 3px 8px; cursor: pointer;
+                  border: 1px solid #ddd; border-radius: 4px; background: #f0f2f5; }
+    #choose-dir:hover { background: #e4e6e9; }
+
+    .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    button.primary { background: #1877f2; color: #fff; border: none; }
+    button.primary:hover { background: #166fe5; }
+    button.secondary { background: #f0f2f5; color: #050505; border: none; }
+    button.secondary:hover { background: #e4e6e9; }
+    button.danger { background: #fff; color: #d32f2f; border: 1px solid #d32f2f; }
+    button.danger:hover { background: #fdecea; }
+    .actions button { flex: 1; min-width: 0; padding: 7px 4px; cursor: pointer;
+                      border-radius: 6px; font: 12px sans-serif; }
+
+    .empty { color: #65676b; font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h3>PKT Reaction Collector</h3>
+
+  <div class="stat">
+    <span class="label">Block 👍 (Like / Love / Haha)</span>
+    <span class="count" id="n-good">0</span>
+  </div>
+  <div class="stat">
+    <span class="label">Block 😤 (Buồn / Phẫn nộ)</span>
+    <span class="count" id="n-angry">0</span>
+  </div>
+  <div class="stat">
+    <span class="label">Tổng</span>
+    <span class="count" id="n-total">0</span>
+  </div>
+
+  <p class="empty" id="empty-msg" style="display:none">
+    Chưa có dữ liệu. Vào Facebook và dùng nút Block 👍 / 😤 trên bài viết, bình luận, video.
+  </p>
+
+  <div class="section">
+    <div class="section-title">Thư mục lưu JSON</div>
+    <div class="dir-row">
+      <span id="dir-path">Chưa chọn (tải về Downloads)</span>
+      <button id="choose-dir">Đổi</button>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="export-json" class="primary">Xuất JSON</button>
+    <button id="export-csv"  class="secondary">Xuất CSV</button>
+    <button id="clear"       class="danger">Xoá</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
