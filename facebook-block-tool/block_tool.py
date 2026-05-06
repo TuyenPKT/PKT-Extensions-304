@@ -12,6 +12,7 @@ import random
 import re as _re
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 from pathlib import Path
@@ -106,17 +107,17 @@ def parse_keyword(match_pattern: str):
     p = (match_pattern
          .replace('\u201c', '"').replace('\u201d', '"')
          .replace('\u2018', "'").replace('\u2019', "'"))
-    required = [nfc(m).lower() for m in _re.findall(r'"([^"]+)"', p)]
-    optional = [nfc(m).lower() for m in _re.findall(r"'([^']+)'", p)]
+    required = [_to_searchable(m) for m in _re.findall(r'"([^"]+)"', p)]
+    optional = [_to_searchable(m) for m in _re.findall(r"'([^']+)'", p)]
     if required or optional:
         return required, optional, set()
-    words = {w.lower() for w in nfc(match_pattern).split() if len(w) >= 3}
+    words = {w for w in _to_searchable(match_pattern).split() if len(w) >= 3}
     return [], [], words
 
 
 def name_matches(name: str, match_pattern: str) -> bool:
     required, optional, fallback = parse_keyword(match_pattern)
-    name_l = nfc(name).lower()
+    name_l = _to_searchable(name)
     if required or optional:
         if required and not all(t in name_l for t in required):
             return False
@@ -148,12 +149,37 @@ _LOOKALIKE = str.maketrans({
 })
 
 
+def _build_math_alpha_map() -> dict:
+    """U+1D400–U+1D7FF: Mathematical Bold/Italic/Fraktur/Script/... → ASCII."""
+    _dw = {'ZERO':'0','ONE':'1','TWO':'2','THREE':'3','FOUR':'4',
+           'FIVE':'5','SIX':'6','SEVEN':'7','EIGHT':'8','NINE':'9'}
+    m = {}
+    for cp in range(0x1D400, 0x1D800):
+        name = unicodedata.name(chr(cp), '')
+        if not name.startswith('MATHEMATICAL'):
+            continue
+        parts = name.split()
+        last = parts[-1]
+        if len(last) == 1 and last.isalpha():
+            m[chr(cp)] = last.lower() if 'SMALL' in name else last.upper()
+        elif last in _dw:
+            m[chr(cp)] = _dw[last]
+    return m
+
+_MATH_ALPHA = str.maketrans(_build_math_alpha_map())
+
+
+def _to_searchable(s: str) -> str:
+    """Lookalike + Math-alpha → NFC lower. Giữ nguyên dấu tiếng Việt."""
+    return nfc(s.translate(_LOOKALIKE).translate(_MATH_ALPHA)).lower()
+
+
 def _strip_diacritics(s: str) -> str:
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
 
 def _normalize_detect(s: str) -> str:
-    s = s.translate(_LOOKALIKE)
+    s = s.translate(_LOOKALIKE).translate(_MATH_ALPHA)
     s = _strip_diacritics(s).lower()
     s = _re.sub(r'[^a-z0-9\s]', ' ', s)
     return _re.sub(r'\s+', ' ', s).strip()
@@ -218,7 +244,7 @@ def is_gambling(name: str) -> bool:
 def should_block(name: str, match_pattern: str, mode: str = 'pages') -> bool:
     if mode == 'people':
         required, optional, fallback = parse_keyword(match_pattern)
-        name_l = nfc(name).lower()
+        name_l = _to_searchable(name)
         if required or optional:
             req_ok = all(t in name_l for t in required) if required else True
             opt_ok = any(t in name_l for t in optional) if optional else True
@@ -419,13 +445,26 @@ async def block_profile(page, url: str) -> str:
         await block_item.click()
         await asyncio.sleep(1)
 
-        confirm = page.locator('[role="button"]').filter(
-            has_text=_re.compile(r'xác nhận|confirm|^chặn$|^block$', _re.IGNORECASE)
-        ).last
+        # Chờ dialog confirm xuất hiện
+        try:
+            await page.wait_for_selector('[role="dialog"],[role="alertdialog"]', timeout=5000)
+        except Exception:
+            pass
+
+        # Tìm trong dialog trước, fallback toàn trang
+        _pat = _re.compile(r'xác nhận|confirm|chặn|block', _re.IGNORECASE)
+        confirm = page.locator('[role="dialog"] [role="button"],[role="alertdialog"] [role="button"]').filter(has_text=_pat).last
+        if not await confirm.count():
+            confirm = page.locator('[role="button"]').filter(has_text=_pat).last
 
         if not await confirm.count():
+            dlg_btns = []
+            try:
+                dlg_btns = await page.locator('[role="dialog"] [role="button"],[role="alertdialog"] [role="button"]').all_text_contents()
+            except Exception:
+                pass
             await page.keyboard.press('Escape')
-            return 'no_confirm_btn'
+            return f'no_confirm_btn | btns: {dlg_btns[:6]}'
 
         await confirm.click()
         await asyncio.sleep(10)
@@ -501,6 +540,35 @@ async def main(keyword_file: str, mode: str, delay: int):
         if 'login' in page.url or await page.locator('[name="email"]').count():
             log(entries, 'info', 'Chưa đăng nhập — đăng nhập xong nhấn Enter.')
             input()
+
+        # ── Pause/resume bằng phím 'p' ───────────────────────────────────────
+        _resume = asyncio.Event()
+        _resume.set()  # bắt đầu ở trạng thái running
+
+        def _stdin_watcher():
+            while True:
+                try:
+                    line = sys.stdin.readline()
+                except Exception:
+                    break
+                if not line:
+                    break
+                if line.strip().lower() == 'p':
+                    if _resume.is_set():
+                        _resume.clear()
+                        print('\n[pause] Đã tạm dừng — nhấn p + Enter để tiếp tục.')
+                    else:
+                        _resume.set()
+                        print('[resume] Tiếp tục...')
+
+        threading.Thread(target=_stdin_watcher, daemon=True).start()
+        print('[info] Nhấn p + Enter bất cứ lúc nào để pause/resume.')
+
+        async def check_pause():
+            if not _resume.is_set():
+                t = datetime.now().strftime('%H:%M:%S')
+                print(f'{t} [pause ] Đang tạm dừng...')
+                await _resume.wait()
 
         if mode == 'direct':
             log(entries, 'info', f'Direct mode: {kw_path.name}')
@@ -628,6 +696,7 @@ async def main(keyword_file: str, mode: str, delay: int):
                 if stop_all:
                     break
 
+                await check_pause()
                 rl = await risk_level()
                 if rl >= 1:
                     await handle_risk(rl)
@@ -693,7 +762,7 @@ async def main(keyword_file: str, mode: str, delay: int):
 
             try:
                 await page.goto(
-                    _SEARCH_URL[mode].format(quote(search_kw)),
+                    _SEARCH_URL[mode].format(quote(_to_searchable(search_kw))),
                     wait_until='domcontentloaded', timeout=20000,
                 )
                 await human_pause()
@@ -706,6 +775,7 @@ async def main(keyword_file: str, mode: str, delay: int):
 
             stop_all = False
             for url in profiles:
+                await check_pause()
                 rl = await risk_level()
                 if rl >= 1:
                     await handle_risk(rl)

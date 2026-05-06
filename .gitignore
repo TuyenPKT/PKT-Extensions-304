@@ -19,3 +19,8 @@ Anti.txt
 
 # OS
 .DS_Store
+
+# settings
+.vscode/
+
+.claude/
