@@ -86,13 +86,13 @@ def nfc(s: str) -> str:
 
 def split_line(line: str) -> tuple[str, str]:
     """Tach search_kw va match_pattern.
-    &@  -> AND: tat ca cum double-quote phai co.
-    &&  -> AND+OR: search_kw phai co + it nhat 1 cum single-quote phai co.
+    &&  -> search_kw tu dong them vao required, phan con lai la optional.
+    &@  -> tat ca cum double-quote deu phai co trong ten.
+    plain -> fallback match (can >= 2 tu khop).
     """
     if '&&' in line and '&@' not in line:
         left, right = line.split('&&', 1)
         kw = left.strip()
-        # Tự ghép search_kw vào match làm required term
         return kw, f'"{kw}" {right.strip()}'
     if '&@' in line:
         left, right = line.split('&@', 1)
@@ -119,11 +119,15 @@ def name_matches(name: str, match_pattern: str) -> bool:
     required, optional, fallback = parse_keyword(match_pattern)
     name_l = _to_searchable(name)
     if required or optional:
-        if required and not all(t in name_l for t in required):
-            return False
-        if optional and not any(t in name_l for t in optional):
-            return False
-        return True
+        req_ok = all(t in name_l for t in required) if required else True
+        opt_ok = any(t in name_l for t in optional) if optional else True
+        if req_ok and opt_ok:
+            return True
+        # Compact fallback: strip diacritics + xóa space — bắt 'Nổ Hũ 52' ↔ 'nohu52'
+        name_c = _compact(name)
+        req_c = all(_compact(t) in name_c for t in required) if required else True
+        opt_c = any(_compact(t) in name_c for t in optional) if optional else True
+        return req_c and opt_c
     return sum(1 for w in fallback if w in name_l) >= 2
 
 
@@ -178,6 +182,11 @@ def _strip_diacritics(s: str) -> str:
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
 
+def _compact(s: str) -> str:
+    """Strip diacritics + xóa space + lower — để 'nổ hũ 52' ↔ 'nohu52'."""
+    return _re.sub(r'\s+', '', _strip_diacritics(s)).lower()
+
+
 def _normalize_detect(s: str) -> str:
     s = s.translate(_LOOKALIKE).translate(_MATH_ALPHA)
     s = _strip_diacritics(s).lower()
@@ -189,6 +198,8 @@ _GAMBLING_BLACKLIST = {
     'fun88', 'jun88', 'shbet', 'hi88', 'mb66', 'au88', 'tk88', '78win',
     'gk88', '88vin', 'm88', '188bet', 'w88', 'fb88', '789bet', 'pbv88',
     'open88', 'nohu52', 'sunwin', 'go88', 'web88', 'vi68',
+    'bk88', 'v9bet', 'fi88', 'f8bet', 'st666', 'loto188', 'lode88', 'vnloto',
+    'new88', 'bet88', 'thabet', 'kubet',
 }
 
 _GAMBLING_PATTERNS = [
@@ -248,7 +259,7 @@ def should_block(name: str, match_pattern: str, mode: str = 'pages') -> bool:
         if required or optional:
             req_ok = all(t in name_l for t in required) if required else True
             opt_ok = any(t in name_l for t in optional) if optional else True
-            keyword_ok = req_ok and opt_ok and (len(required) + len(optional) >= 2)
+            keyword_ok = req_ok and opt_ok  # &@ / && syntax: user đã chỉ định rõ, không giới hạn thêm
         else:
             keyword_ok = sum(1 for w in fallback if w in name_l) >= 2
         return keyword_ok or _gambling_signals(name) >= 2
@@ -309,25 +320,154 @@ def generate_variants(kw: str) -> list[str]:
     return result
 
 
+def _line_suffix(line: str) -> str:
+    """Trả về phần sau search_kw: ' &@ ...' | ' && ...' | ''."""
+    if '&@' in line:
+        return ' &@ ' + line.split('&@', 1)[1].strip()
+    if '&&' in line:
+        return ' && ' + line.split('&&', 1)[1].strip()
+    return ''
+
+
+# ── Macro system ──────────────────────────────────────────────────────────────
+# Cú pháp định nghĩa : # ten = && 'a' 'b'   hoặc   # ten = &@ "x" && 'a'
+# Cú pháp sử dụng    : search_kw @@ ten
+#                      search_kw &@ "x" @@ ten   (kết hợp)
+
+_MACRO_RE   = _re.compile(r'^#\s*(\w+)\s*=\s*(.+)$')
+_SECTION_RE = _re.compile(r'^##\s*(\w+)')
+
+
+def load_macros(lines: list[str]) -> dict[str, str]:
+    """Trả về dict {tên: body} từ các dòng # trong file."""
+    macros: dict[str, str] = {}
+    for line in lines:
+        m = _MACRO_RE.match(line.strip())
+        if m:
+            macros[m.group(1)] = m.group(2).strip()
+    return macros
+
+
+def expand_macros(line: str, macros: dict[str, str]) -> str:
+    """Resolve @@ macro_name thành body tương ứng.
+    'lương y @@ bacsi' → 'lương y && \\'bác sĩ\\' \\'tiến sĩ\\' ...'
+    'F168 &@ "F168" @@ casino' → 'F168 &@ "F168" && \\'...\\'
+    """
+    if '@@' not in line:
+        return line
+    left, macro_name = line.rsplit('@@', 1)
+    macro_name = macro_name.strip()
+    if macro_name not in macros:
+        print(f'  [macro] Cảnh báo: macro "{macro_name}" không tồn tại')
+        return line
+    body = macros[macro_name]
+    left = left.strip()
+    # Nếu body bắt đầu bằng && hoặc &@ → ghép thẳng
+    # Nếu line đã có &@ và body là && → kết hợp
+    if left.endswith('"') or left.endswith("'"):
+        return f'{left} {body}'
+    return f'{left} {body}'
+
+
 def expand_keyword_file(kw_path: Path) -> list[str]:
-    """Đọc file, bổ sung variant còn thiếu cho keyword 1-2 từ, ghi lại."""
-    lines = [l.strip() for l in kw_path.read_text(encoding='utf-8').splitlines() if l.strip()]
-    existing_lower = {l.lower() for l in lines}
+    """Đọc file, áp section macro ngầm định, expand @@, bổ sung variant.
+    ## SECTION_NAME → tất cả dòng trong section tự động nhận @@ section_name.
+    Dòng # (macro def) và ## (section header) không đưa vào search list."""
+    raw = [l.strip() for l in kw_path.read_text(encoding='utf-8').splitlines() if l.strip()]
+    macros = load_macros(raw)
+
+    # Pass 1: áp implicit section macro
+    section_macro: str | None = None
+    search_lines: list[str] = []
+    for line in raw:
+        if line.startswith('##'):
+            m = _SECTION_RE.match(line)
+            section_macro = m.group(1).lower() if (m and m.group(1).lower() in macros) else None
+            continue
+        if line.startswith('#'):
+            continue
+        if section_macro and '@@' not in line:
+            line = f'{line} @@ {section_macro}'
+        search_lines.append(line)
+
+    # Pass 2: expand @@ in-memory
+    expanded = [expand_macros(l, macros) for l in search_lines]
+
+    # Dedup theo search_kw đã normalize
+    existing_norm: set[str] = set()
+    deduped: list[str] = []
+    for line in expanded:
+        kw, _ = split_line(line)
+        norm = _to_searchable(kw)
+        if norm not in existing_norm:
+            existing_norm.add(norm)
+            deduped.append(line)
 
     new_lines: list[str] = []
-    for line in lines:
+    for line in deduped:
         search_kw, _ = split_line(line)
+        suffix = _line_suffix(line)
         for variant in generate_variants(search_kw):
-            if variant.lower() not in existing_lower:
-                new_lines.append(variant)
-                existing_lower.add(variant.lower())
-                print(f'  [expand] +"{variant}"  ←  "{search_kw}"')
+            norm = _to_searchable(variant)
+            if norm not in existing_norm:
+                existing_norm.add(norm)
+                full = variant + suffix
+                new_lines.append(full)
+                print(f'  [expand] +"{full}"  ←  "{search_kw}"')
 
     if new_lines:
-        kw_path.write_text('\n'.join(lines + new_lines) + '\n', encoding='utf-8')
+        kw_path.write_text('\n'.join(raw + new_lines) + '\n', encoding='utf-8')
         print(f'  [expand] Đã thêm {len(new_lines)} variant vào {kw_path.name}')
 
-    return lines + new_lines
+    return deduped + new_lines
+
+
+def _load_bio_signals(kw_path: Path) -> frozenset[str]:
+    """Trích optional terms từ macro được tham chiếu (@@ explicit hoặc ## section)
+    làm Filter-2 signal list. Chỉ giữ term ≥6 ký tự hoặc có khoảng trắng."""
+    lines = kw_path.read_text(encoding='utf-8').splitlines()
+    macros = load_macros(lines)
+    used: set[str] = set()
+    section_macro: str | None = None
+    for line in lines:
+        s = line.strip()
+        if s.startswith('##'):
+            m = _SECTION_RE.match(s)
+            section_macro = m.group(1).lower() if (m and m.group(1).lower() in macros) else None
+            continue
+        if s.startswith('#') or not s:
+            continue
+        if '@@' in s:
+            used.add(s.rsplit('@@', 1)[1].strip())
+        elif section_macro:
+            used.add(section_macro)
+    signals: set[str] = set()
+    for name in used:
+        body = macros.get(name)
+        if body:
+            _, opt, _ = parse_keyword(body)
+            signals.update(t for t in opt if len(t) >= 6 or ' ' in t)
+    return frozenset(signals)
+
+
+def _bio_match(card_text: str, signals: frozenset, threshold: int = 2) -> bool:
+    """Filter 2: đếm signal trong card text, block nếu ≥ threshold."""
+    if not card_text or not signals:
+        return False
+    text = _to_searchable(card_text)
+    return sum(1 for s in signals if s in text) >= threshold
+
+
+def _slug_has(url: str, match_pattern: str) -> bool:
+    """Check URL slug chứa required terms (compact) — bắt page slug ASCII như nohu52net."""
+    if 'profile.php' in url:
+        return False
+    from urllib.parse import urlparse
+    slug = urlparse(url).path.strip('/').lower()
+    required, _, _ = parse_keyword(match_pattern)
+    if not required:
+        return False
+    return all(_compact(t) in slug for t in required)
 
 
 def _clean_profile_url(href: str):
@@ -351,7 +491,8 @@ def _clean_profile_url(href: str):
         return None
 
 
-async def extract_profiles(page, match_pattern: str, mode: str = 'pages') -> list[str]:
+async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
+                           bio_signals: frozenset = frozenset()) -> list[str]:
     try:
         await page.wait_for_selector('[role="feed"]', timeout=15000)
     except Exception:
@@ -369,7 +510,7 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages') -> lis
     elements = await page.query_selector_all('[role="main"] a[href]')
     print(f'  [extract] anchors: {len(elements)}')
 
-    seen: dict[str, str] = {}  # url → best name
+    seen: dict[str, tuple[str, str]] = {}  # url → (best_name, card_text)
     for el in elements:
         try:
             href = await el.get_attribute('href') or ''
@@ -377,19 +518,32 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages') -> lis
             if not clean_url:
                 continue
             name = ' '.join((await el.inner_text()).split())
-            prev = seen.get(clean_url, '')
-            if len(name) > len(prev):
-                seen[clean_url] = name
+            card = ''
+            if bio_signals:
+                card = await el.evaluate(
+                    "el => (el.closest('li') || el.closest('[role=\"article\"]')"
+                    " || el.parentElement?.parentElement || el.parentElement)"
+                    "?.innerText || ''"
+                )
+                card = ' '.join(card.split())
+            prev_name, prev_card = seen.get(clean_url, ('', ''))
+            if len(name) > len(prev_name):
+                seen[clean_url] = (name, card or prev_card)
         except Exception:
             continue
 
-    pairs = [{'url': u, 'name': n} for u, n in seen.items()]
+    pairs = [{'url': u, 'name': n, 'card': c} for u, (n, c) in seen.items()]
 
     print(f'  [extract] raw: {len(pairs)} links')
+    result = []
     for p in pairs:
-        print(f'    "{p["name"][:60]}" → {p["url"][:70]}')
-
-    return [p['url'] for p in pairs if should_block(p['name'], match_pattern, mode)]
+        f1 = should_block(p['name'], match_pattern, mode) or _slug_has(p['url'], match_pattern)
+        f2 = (not f1) and _bio_match(p['card'], bio_signals)
+        tag = '[F1]' if f1 else '[F2]' if f2 else '    '
+        print(f'    {tag} "{p["name"][:55]}" → {p["url"][:60]}')
+        if f1 or f2:
+            result.append(p['url'])
+    return result
 
 
 async def block_profile(page, url: str) -> str:
@@ -508,6 +662,10 @@ async def main(keyword_file: str, mode: str, delay: int):
         if not keywords:
             print('File từ khoá rỗng.')
             return
+
+    bio_signals = _load_bio_signals(kw_path) if mode != 'direct' else frozenset()
+    if bio_signals:
+        print(f'[init] Filter-2 bio: {len(bio_signals)} signals từ macro')
 
     logs_dir = Path(__file__).parent / 'logs'
     logs_dir.mkdir(exist_ok=True)
@@ -766,7 +924,7 @@ async def main(keyword_file: str, mode: str, delay: int):
                     wait_until='domcontentloaded', timeout=20000,
                 )
                 await human_pause()
-                profiles = await extract_profiles(page, match_pattern, mode)
+                profiles = await extract_profiles(page, match_pattern, mode, bio_signals)
             except Exception as e:
                 log(entries, 'error', f'Lỗi search "{search_kw}": {e}')
                 continue
