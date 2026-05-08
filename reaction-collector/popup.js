@@ -56,31 +56,41 @@ async function render() {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
+async function readFileText(handle, filename) {
+  try {
+    const fh = await handle.getFileHandle(filename);
+    const file = await fh.getFile();
+    return await file.text();
+  } catch { return null; }
+}
+
 async function exportJSON() {
   const { [KEY]: list = [] } = await chrome.storage.local.get(KEY);
   if (!list.length) { alert('Chưa có dữ liệu.'); return; }
 
-  const content  = JSON.stringify(list, null, 2);
-  const filename = `pkt-reactions-${Date.now()}.json`;
+  const filename = `pkt-reactions.json`;
   const handle   = await getDirHandle();
 
   if (handle) {
     try {
       if (!await verifyPermission(handle)) throw new Error('no-perm');
+      // Đọc file cũ, merge dedupe theo url
+      const existing = JSON.parse(await readFileText(handle, filename) || '[]');
+      const seen = new Set(existing.map(e => e.url));
+      const merged = [...existing, ...list.filter(e => !seen.has(e.url))];
       const fh = await handle.getFileHandle(filename, { create: true });
       const w  = await fh.createWritable();
-      await w.write(content);
+      await w.write(JSON.stringify(merged, null, 2));
       await w.close();
-      alert(`Đã lưu: ${handle.name}/${filename}`);
+      alert(`Đã lưu: ${handle.name}/${filename} (${merged.length} entries)`);
       return;
     } catch {
-      // Quyền bị thu hồi hoặc lỗi ghi → fallback download
+      // fallback
     }
   }
 
-  // Fallback: trình duyệt tải về Downloads
   Object.assign(document.createElement('a'), {
-    href:     URL.createObjectURL(new Blob([content], { type: 'application/json' })),
+    href:     URL.createObjectURL(new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' })),
     download: filename,
   }).click();
 }
@@ -89,16 +99,37 @@ async function exportCSV() {
   const { [KEY]: list = [] } = await chrome.storage.local.get(KEY);
   if (!list.length) { alert('Chưa có dữ liệu.'); return; }
 
-  const rows = [
-    'url,type,source,timestamp',
-    ...list.map(e =>
-      [e.url, e.type, `"${(e.source || '').replace(/"/g, '""')}"`,
-       new Date(e.ts).toISOString()].join(',')
-    ),
-  ];
+  const toRow = e => [e.url, e.type, `"${(e.source || '').replace(/"/g, '""')}"`,
+    new Date(e.ts).toISOString()].join(',');
+
+  const filename = `pkt-reactions.csv`;
+  const handle   = await getDirHandle();
+
+  if (handle) {
+    try {
+      if (!await verifyPermission(handle)) throw new Error('no-perm');
+      // Đọc file cũ, lấy URLs đã có
+      const existing = await readFileText(handle, filename) || '';
+      const existingUrls = new Set(
+        existing.split('\n').slice(1).map(r => r.split(',')[0]).filter(Boolean)
+      );
+      const newRows = list.filter(e => !existingUrls.has(e.url)).map(toRow);
+      const content = existing
+        ? (existing.trimEnd() + '\n' + newRows.join('\n'))
+        : ('url,type,source,timestamp\n' + newRows.join('\n'));
+      const fh = await handle.getFileHandle(filename, { create: true });
+      const w  = await fh.createWritable();
+      await w.write(content);
+      await w.close();
+      alert(`Đã lưu: ${handle.name}/${filename} (+${newRows.length} mới)`);
+      return;
+    } catch { /* fallback */ }
+  }
+
+  const rows = ['url,type,source,timestamp', ...list.map(toRow)];
   Object.assign(document.createElement('a'), {
     href:     URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' })),
-    download: `pkt-reactions-${Date.now()}.csv`,
+    download: filename,
   }).click();
 }
 
