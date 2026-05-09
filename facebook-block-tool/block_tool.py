@@ -183,8 +183,8 @@ def _strip_diacritics(s: str) -> str:
 
 
 def _compact(s: str) -> str:
-    """Strip diacritics + xóa space + lower — để 'nổ hũ 52' ↔ 'nohu52'."""
-    return _re.sub(r'\s+', '', _strip_diacritics(s)).lower()
+    """Strip diacritics + xóa space/punct + lower — để 'nổ hũ 52' ↔ 'nohu52', 'hi-88' ↔ 'hi88'."""
+    return _re.sub(r'[^a-z0-9]', '', _strip_diacritics(s).lower())
 
 
 def _normalize_detect(s: str) -> str:
