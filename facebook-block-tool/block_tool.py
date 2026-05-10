@@ -21,13 +21,14 @@ from urllib.parse import quote
 
 
 def _prompt_install(label: str, cmd: list[str]) -> None:
-    print(f'  Lệnh cài: {" ".join(cmd)}')
+    pip_cmd = cmd + ['--break-system-packages'] if '-m' in cmd and 'pip' in cmd else cmd
+    print(f'  Lệnh cài: {" ".join(pip_cmd)}')
     ans = input('  Tự động cài ngay? [y/N]: ').strip().lower()
     if ans == 'y':
-        subprocess.check_call(cmd)
+        subprocess.check_call(pip_cmd)
         print(f'[setup] {label} đã cài xong.')
     else:
-        sys.exit(f'Chạy thủ công rồi thử lại: {" ".join(cmd)}')
+        sys.exit(f'Chạy thủ công rồi thử lại: {" ".join(pip_cmd)}')
 
 
 def check_deps() -> None:
@@ -510,6 +511,9 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
     elements = await page.query_selector_all('[role="main"] a[href]')
     print(f'  [extract] anchors: {len(elements)}')
 
+    required_terms, optional_terms, _ = parse_keyword(match_pattern)
+    need_card = bool(bio_signals or optional_terms)
+
     seen: dict[str, tuple[str, str]] = {}  # url → (best_name, card_text)
     for el in elements:
         try:
@@ -519,7 +523,7 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
                 continue
             name = ' '.join((await el.inner_text()).split())
             card = ''
-            if bio_signals:
+            if need_card:
                 card = await el.evaluate(
                     "el => (el.closest('li') || el.closest('[role=\"article\"]')"
                     " || el.parentElement?.parentElement || el.parentElement)"
@@ -537,11 +541,34 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
     print(f'  [extract] raw: {len(pairs)} links')
     result = []
     for p in pairs:
-        f1 = should_block(p['name'], match_pattern, mode) or _slug_has(p['url'], match_pattern)
+        name_l = _to_searchable(p['name'])
+        card_l = _to_searchable(p['card'])
+        name_c = _compact(p['name'])
+
+        if required_terms or optional_terms:
+            req_ok = all(t in name_l for t in required_terms) if required_terms else True
+            req_c  = all(_compact(t) in name_c for t in required_terms) if required_terms else True
+            name_req = req_ok or req_c
+            # optional: đủ nếu có trong tên HOẶC trong card description
+            opt_in_name = any(t in name_l for t in optional_terms) if optional_terms else True
+            opt_in_card = any(t in card_l for t in optional_terms) if optional_terms else False
+            name_f1 = name_req and (opt_in_name or opt_in_card)
+        else:
+            name_f1 = name_matches(p['name'], match_pattern)
+
+        f1 = name_f1 or is_gambling(p['name']) or _slug_has(p['url'], match_pattern)
         f2 = (not f1) and _bio_match(p['card'], bio_signals)
-        tag = '[F1]' if f1 else '[F2]' if f2 else '    '
-        print(f'    {tag} "{p["name"][:55]}" → {p["url"][:60]}')
+        if f1:
+            tag = '[F1]'
+        elif f2:
+            tag = '[F2]'
+        else:
+            tag = '[SKIP]'
+            card_preview = p['card'][:120].replace('\n', ' ') if p['card'] else '<empty>'
+            print(f'    {tag} "{p["name"][:55]}" | {p["url"][:60]}')
+            print(f'           card="{card_preview}"')
         if f1 or f2:
+            print(f'    {tag} "{p["name"][:55]}"')
             result.append(p['url'])
     return result
 
