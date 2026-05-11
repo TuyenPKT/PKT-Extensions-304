@@ -200,7 +200,7 @@ _GAMBLING_BLACKLIST = {
     'gk88', '88vin', 'm88', '188bet', 'w88', 'fb88', '789bet', 'pbv88',
     'open88', 'nohu52', 'sunwin', 'go88', 'web88', 'vi68',
     'bk88', 'v9bet', 'fi88', 'f8bet', 'st666', 'loto188', 'lode88', 'vnloto',
-    'new88', 'bet88', 'thabet', 'kubet',
+    'new88', 'bet88', 'thabet', 'kubet', 'okvip', 'rikvip',
 }
 
 _GAMBLING_PATTERNS = [
@@ -452,11 +452,15 @@ def _load_bio_signals(kw_path: Path) -> frozenset[str]:
 
 
 def _bio_match(card_text: str, signals: frozenset, threshold: int = 2) -> bool:
-    """Filter 2: đếm signal trong card text, block nếu ≥ threshold."""
+    """Filter 2: đếm signal trong card text, block nếu ≥ threshold.
+    Multi-word signal (có space) đủ specific → 1 cái là block."""
     if not card_text or not signals:
         return False
     text = _to_searchable(card_text)
-    return sum(1 for s in signals if s in text) >= threshold
+    matched = [s for s in signals if s in text]
+    if len(matched) >= threshold:
+        return True
+    return any(' ' in s for s in matched)
 
 
 def _slug_has(url: str, match_pattern: str) -> bool:
