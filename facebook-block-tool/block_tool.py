@@ -645,16 +645,31 @@ async def block_profile(page, url: str) -> str:
 
         await asyncio.sleep(0.8)
 
-        block_item = page.locator('[role="menuitem"]').filter(
-            has_text=_re.compile(r'chặn|block', _re.IGNORECASE)
-        ).first
-
+        # Ưu tiên menu item chỉ có "Chặn" (không phải "Báo cáo hoặc Chặn")
+        all_items = page.locator('[role="menuitem"]')
+        block_item = None
+        for item in await all_items.all():
+            try:
+                txt = (await item.inner_text()).strip().lower()
+                if txt in ('chặn', 'block'):
+                    block_item = item
+                    break
+            except Exception:
+                continue
+        if block_item is None:
+            block_item = page.locator('[role="menuitem"]').filter(
+                has_text=_re.compile(r'^chặn$|^block$', _re.IGNORECASE)
+            ).first
+        if not await block_item.count():
+            block_item = page.locator('[role="menuitem"]').filter(
+                has_text=_re.compile(r'chặn|block', _re.IGNORECASE)
+            ).first
         if not await block_item.count():
             items = await page.locator('[role="menuitem"]').all_text_contents()
             await page.keyboard.press('Escape')
             return f'no_block_option | menu: {items}'
 
-        await block_item.click()
+        await block_item.click(timeout=10000)
         await asyncio.sleep(1)
 
         # Chờ dialog confirm xuất hiện
@@ -663,11 +678,23 @@ async def block_profile(page, url: str) -> str:
         except Exception:
             pass
 
+        # Safety check: nếu vào flow report/support → thoát
+        try:
+            dlg_text = await page.locator('[role="dialog"],[role="alertdialog"]').first.inner_text()
+            if any(k in dlg_text.lower() for k in ('hỗ trợ', 'nguy hiểm', 'khẩn cấp', 'report')):
+                await page.keyboard.press('Escape')
+                return 'wrong_flow: report dialog thay vì block'
+        except Exception:
+            pass
+
         # Tìm trong dialog trước, fallback toàn trang
-        _pat = _re.compile(r'xác nhận|confirm|chặn|block', _re.IGNORECASE)
+        _pat = _re.compile(r'^chặn$|^block$|^xác nhận$|^confirm$', _re.IGNORECASE)
         confirm = page.locator('[role="dialog"] [role="button"],[role="alertdialog"] [role="button"]').filter(has_text=_pat).last
         if not await confirm.count():
-            confirm = page.locator('[role="button"]').filter(has_text=_pat).last
+            _pat2 = _re.compile(r'xác nhận|confirm|chặn|block', _re.IGNORECASE)
+            confirm = page.locator('[role="dialog"] [role="button"],[role="alertdialog"] [role="button"]').filter(has_text=_pat2).last
+        if not await confirm.count():
+            confirm = page.locator('[role="button"]').filter(has_text=_re.compile(r'chặn|block', _re.IGNORECASE)).last
 
         if not await confirm.count():
             dlg_btns = []
@@ -678,7 +705,7 @@ async def block_profile(page, url: str) -> str:
             await page.keyboard.press('Escape')
             return f'no_confirm_btn | btns: {dlg_btns[:6]}'
 
-        await confirm.click()
+        await confirm.click(timeout=10000)
         await asyncio.sleep(10)
         return 'blocked'
 
