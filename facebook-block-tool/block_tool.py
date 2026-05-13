@@ -101,6 +101,15 @@ def split_line(line: str) -> tuple[str, str]:
     return line.strip(), line.strip()
 
 
+def _term_in(term: str, text: str) -> bool:
+    """Substring match với word-boundary sau số: 'san 5' match 'san 5.0' nhưng không match 'san 500'."""
+    idx = text.find(term)
+    if idx == -1:
+        return False
+    after = text[idx + len(term):]
+    return not after or after[0] == ' ' or (after[0] == '.' and len(after) > 1 and after[1].isdigit())
+
+
 def parse_keyword(match_pattern: str):
     """required: cụm "" — ALL phải có.
     optional: cụm '' — ít nhất 1 phải có.
@@ -112,7 +121,7 @@ def parse_keyword(match_pattern: str):
     optional = [_to_searchable(m) for m in _re.findall(r"'([^']+)'", p)]
     if required or optional:
         return required, optional, set()
-    words = {w for w in _to_searchable(match_pattern).split() if len(w) >= 3}
+    words = {w for w in _to_searchable(match_pattern).split() if len(w) >= 2}
     return [], [], words
 
 
@@ -120,8 +129,8 @@ def name_matches(name: str, match_pattern: str) -> bool:
     required, optional, fallback = parse_keyword(match_pattern)
     name_l = _to_searchable(name)
     if required or optional:
-        req_ok = all(t in name_l for t in required) if required else True
-        opt_ok = any(t in name_l for t in optional) if optional else True
+        req_ok = all(_term_in(t, name_l) for t in required) if required else True
+        opt_ok = any(_term_in(t, name_l) for t in optional) if optional else True
         if req_ok and opt_ok:
             return True
         # Compact fallback: strip diacritics + xóa space — bắt 'Nổ Hũ 52' ↔ 'nohu52'
@@ -129,7 +138,7 @@ def name_matches(name: str, match_pattern: str) -> bool:
         req_c = all(_compact(t) in name_c for t in required) if required else True
         opt_c = any(_compact(t) in name_c for t in optional) if optional else True
         return req_c and opt_c
-    return sum(1 for w in fallback if w in name_l) >= 2
+    return bool(fallback) and all(w in name_l for w in fallback)
 
 
 # ── Auto-detect gambling/scam ──────────────────────────────────────────────────
@@ -241,8 +250,10 @@ _BLACKLIST_REGEXES = [keyword_to_variant_regex(t) for t in _GAMBLING_BLACKLIST]
 def _gambling_signals(name: str) -> int:
     """Đếm số signal gambling độc lập: blacklist-hit + pattern-hit (max 2)."""
     n = _normalize_detect(name)
+    n_c = _compact(name)
     blacklist_hit = (
         any(term in n for term in _GAMBLING_BLACKLIST) or
+        any(term in n_c for term in _GAMBLING_BLACKLIST) or
         any(rx.search(name) for rx in _BLACKLIST_REGEXES)
     )
     pattern_hit = any(pat.search(n) for pat in _GAMBLING_PATTERNS)
@@ -262,7 +273,7 @@ def should_block(name: str, match_pattern: str, mode: str = 'pages') -> bool:
             opt_ok = any(t in name_l for t in optional) if optional else True
             keyword_ok = req_ok and opt_ok  # &@ / && syntax: user đã chỉ định rõ, không giới hạn thêm
         else:
-            keyword_ok = sum(1 for w in fallback if w in name_l) >= 2
+            keyword_ok = bool(fallback) and all(w in name_l for w in fallback)
         return keyword_ok or _gambling_signals(name) >= 2
     return name_matches(name, match_pattern) or is_gambling(name)
 
@@ -387,8 +398,6 @@ def expand_keyword_file(kw_path: Path) -> list[str]:
             continue
         if line.startswith('#'):
             continue
-        if section_macro and '@@' not in line:
-            line = f'{line} @@ {section_macro}'
         search_lines.append(line)
 
     # Pass 2: expand @@ in-memory
@@ -550,12 +559,12 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
         name_c = _compact(p['name'])
 
         if required_terms or optional_terms:
-            req_ok = all(t in name_l for t in required_terms) if required_terms else True
+            req_ok = all(_term_in(t, name_l) for t in required_terms) if required_terms else True
             req_c  = all(_compact(t) in name_c for t in required_terms) if required_terms else True
             name_req = req_ok or req_c
             # optional: đủ nếu có trong tên HOẶC trong card description
-            opt_in_name = any(t in name_l for t in optional_terms) if optional_terms else True
-            opt_in_card = any(t in card_l for t in optional_terms) if optional_terms else False
+            opt_in_name = any(_term_in(t, name_l) for t in optional_terms) if optional_terms else True
+            opt_in_card = any(_term_in(t, card_l) for t in optional_terms) if optional_terms else False
             name_f1 = name_req and (opt_in_name or opt_in_card)
         else:
             name_f1 = name_matches(p['name'], match_pattern)
@@ -569,7 +578,25 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
         else:
             tag = '[SKIP]'
             card_preview = p['card'][:120].replace('\n', ' ') if p['card'] else '<empty>'
-            print(f'    {tag} "{p["name"][:55]}" | {p["url"][:60]}')
+            # F1 reason
+            if required_terms or optional_terms:
+                req_fail = [t for t in required_terms if t not in name_l and _compact(t) not in name_c]
+                opt_miss_name = [t for t in optional_terms if t not in name_l] if optional_terms else []
+                opt_miss_card = [t for t in optional_terms if t not in card_l] if optional_terms else []
+                if req_fail:
+                    f1_why = f'thiếu required={req_fail[:3]}'
+                elif opt_miss_name and len(opt_miss_name) == len(optional_terms):
+                    f1_why = f'optional không có trong tên lẫn card'
+                else:
+                    f1_why = 'F1 fail'
+            else:
+                f1_why = f'fallback miss: {[w for w in parse_keyword(match_pattern)[2] if w not in name_l]}'
+            # F2 reason
+            text_l = _to_searchable(p['card'])
+            matched_signals = [s for s in bio_signals if s in text_l]
+            f2_why = f'bio {len(matched_signals)}/{len(bio_signals)} signal' if bio_signals else 'no bio_signals'
+            print(f'    {tag} "{p["name"][:55]}"')
+            print(f'           F1: {f1_why} | F2: {f2_why}')
             print(f'           card="{card_preview}"')
         if f1 or f2:
             print(f'    {tag} "{p["name"][:55]}"')
