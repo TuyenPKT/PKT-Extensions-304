@@ -678,15 +678,6 @@ async def block_profile(page, url: str) -> str:
         except Exception:
             pass
 
-        # Safety check: nếu vào flow report/support → thoát
-        try:
-            dlg_text = await page.locator('[role="dialog"],[role="alertdialog"]').first.inner_text()
-            if any(k in dlg_text.lower() for k in ('hỗ trợ', 'nguy hiểm', 'khẩn cấp', 'report')):
-                await page.keyboard.press('Escape')
-                return 'wrong_flow: report dialog thay vì block'
-        except Exception:
-            pass
-
         # Tìm trong dialog trước, fallback toàn trang
         _pat = _re.compile(r'^chặn$|^block$|^xác nhận$|^confirm$', _re.IGNORECASE)
         confirm = page.locator('[role="dialog"] [role="button"],[role="alertdialog"] [role="button"]').filter(has_text=_pat).last
@@ -751,6 +742,28 @@ async def main(keyword_file: str, mode: str, delay: int):
     bio_signals = _load_bio_signals(kw_path) if mode != 'direct' else frozenset()
     if bio_signals:
         print(f'[init] Filter-2 bio: {len(bio_signals)} signals từ macro')
+
+    # ── Checkpoint resume ─────────────────────────────────────────────────────
+    import json as _json
+    _ckpt_path = Path(__file__).parent / 'progress.json'
+
+    def _save_ckpt(ki: int) -> None:
+        _ckpt_path.write_text(_json.dumps({'file': str(kw_path.resolve()), 'ki': ki}), encoding='utf-8')
+
+    def _load_ckpt() -> int:
+        if not _ckpt_path.exists():
+            return -1
+        try:
+            d = _json.loads(_ckpt_path.read_text(encoding='utf-8'))
+            if d.get('file') == str(kw_path.resolve()):
+                return int(d.get('ki', -1))
+        except Exception:
+            pass
+        return -1
+
+    _resume_from = _load_ckpt()
+    if _resume_from >= 0:
+        print(f'[resume] Tiếp tục từ keyword #{_resume_from + 2} (đã xong {_resume_from + 1})')
 
     logs_dir = Path(__file__).parent / 'logs'
     logs_dir.mkdir(exist_ok=True)
@@ -840,17 +853,17 @@ async def main(keyword_file: str, mode: str, delay: int):
 
         # LOW=0 MEDIUM=1 HIGH=2 CRITICAL=3
         async def risk_level() -> int:
-            url = page.url
-            # CRITICAL: UI captcha thật
-            if await page.locator('[name="captcha"], iframe[src*="recaptcha"], [data-testid="captcha"]').count():
-                return 3
-            # HIGH: redirect vào checkpoint/challenge/login device
-            if any(k in url for k in ('/checkpoint/', '/challenge/', '/login/device', '/login/identify')):
-                return 2
-            # MEDIUM: redirect về login bất thường (không phải khởi động)
-            if 'login' in url and 'facebook.com' in url:
-                return 1
-            return 0
+            try:
+                url = page.url
+                if await page.locator('[name="captcha"], iframe[src*="recaptcha"], [data-testid="captcha"]').count():
+                    return 3
+                if any(k in url for k in ('/checkpoint/', '/challenge/', '/login/device', '/login/identify')):
+                    return 2
+                if 'login' in url and 'facebook.com' in url:
+                    return 1
+                return 0
+            except Exception:
+                return 0
 
         async def cooldown(minutes: int):
             end = time.time() + minutes * 60
@@ -992,6 +1005,9 @@ async def main(keyword_file: str, mode: str, delay: int):
 
         # ── Keyword search mode ───────────────────────────────────────────────
         for ki, line in enumerate(keywords if mode != 'direct' else []):
+            if ki <= _resume_from:
+                continue  # bỏ qua keyword đã xử lý trước khi tắt PC
+
             # Kiểm tra hết window recovery (24h) → về nhịp bình thường
             if recovery_mode and (time.time() - recovery_start) >= RECOVERY_HOURS * 3600:
                 recovery_mode = False
@@ -1068,6 +1084,8 @@ async def main(keyword_file: str, mode: str, delay: int):
 
                 await asyncio.sleep(_action_delay())
 
+            _save_ckpt(ki)  # lưu checkpoint sau khi xong keyword này
+
             if stop_all:
                 break
 
@@ -1083,6 +1101,8 @@ async def main(keyword_file: str, mode: str, delay: int):
                     await asyncio.sleep(random.uniform(0.4, 1.0))
 
         log(entries, 'info', f'Hoàn thành | Đã chặn: {blocked_total} | Bỏ qua: {skipped_total}')
+        if _ckpt_path.exists():
+            _ckpt_path.unlink()  # xóa checkpoint khi chạy xong hết
         await ctx.close()
 
     lines = [f'{e["time"]}\t{e["type"]}\t{e["text"]}' for e in entries]
