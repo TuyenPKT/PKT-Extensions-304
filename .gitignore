@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 venv/
 .venv/
+*.json
 
 # Playwright browser profile (chứa session/cookie Facebook)
 facebook-block-tool/fb_profile/
@@ -24,3 +25,5 @@ Anti.txt
 .vscode
 
 .claude
+
+

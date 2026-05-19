@@ -1090,7 +1090,10 @@ async def main(keyword_file: str, mode: str, delay: int):
                 break
 
             # Về home giữa các keyword, scroll nhẹ
-            await page.goto('https://www.facebook.com', wait_until='domcontentloaded')
+            try:
+                await page.goto('https://www.facebook.com', wait_until='domcontentloaded')
+            except Exception:
+                break
             await human_pause()
             for _ in range(random.randint(2, 5)):
                 dy = random.randint(200, 600)
