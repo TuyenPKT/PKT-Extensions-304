@@ -1,0 +1,85 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0d0d14;
+  --surface: #13131e;
+  --surface2: #1a1a28;
+  --surface3: #20202f;
+  --border: #2a2a3d;
+  --text: #e2e2f0;
+  --text-dim: #7a7a9a;
+  --text-muted: #4a4a65;
+  --accent: #6c63ff;
+  --accent-dim: #3d3880;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #f59e0b;
+  --blue: #3b82f6;
+  --f1: #6c63ff;
+  --f2: #f59e0b;
+  --skip: #4a4a65;
+  --block-color: #22c55e;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 6px 12px;
+  transition: all 0.15s;
+}
+
+input {
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text);
+  padding: 7px 10px;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+input:focus { border-color: var(--accent); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.badge-f1    { background: var(--f1); color: #fff; }
+.badge-f2    { background: var(--f2); color: #000; }
+.badge-skip  { background: var(--surface3); color: var(--text-dim); }
+.badge-block { background: var(--block-color); color: #000; }
+
+.dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot-red   { background: var(--red); }
+.dot-yellow{ background: var(--yellow); }

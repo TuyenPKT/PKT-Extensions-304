@@ -15,6 +15,9 @@ facebook-block-tool/debug/
 # Logs
 facebook-block-tool/logs/
 
+# Review queue (chứa tên page nghi ngờ để phân tích)
+facebook-block-tool/review_queue.txt
+
 # Keywords (có thể chứa thông tin nhạy cảm)
 Anti.txt
 

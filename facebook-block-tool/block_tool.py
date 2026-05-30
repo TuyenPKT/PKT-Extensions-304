@@ -74,9 +74,23 @@ SKIP_PATHS = {
 }
 
 
+import json as _json_mod
+
+# JSON output mode — bật khi truyền --json flag
+_JSON_MODE: bool = '--json' in sys.argv
+
+
+def _jout(payload: dict) -> None:
+    """In một JSON line lên stdout (flush ngay để Tauri đọc real-time)."""
+    print(_json_mod.dumps(payload, ensure_ascii=False), flush=True)
+
+
 def log(entries: list, kind: str, text: str):
     ts = datetime.now().strftime('%H:%M:%S')
-    print(f'{ts} [{kind:7}] {text}')
+    if _JSON_MODE:
+        _jout({'event': 'log', 'time': ts, 'kind': kind, 'text': text})
+    else:
+        print(f'{ts} [{kind:7}] {text}')
     entries.append({'time': datetime.now().isoformat(), 'type': kind, 'text': text})
 
 
@@ -212,10 +226,14 @@ _GAMBLING_BLACKLIST = {
     'open88', 'nohu52', 'sunwin', 'go88', 'web88', 'vi68',
     'bk88', 'v9bet', 'fi88', 'f8bet', 'st666', 'loto188', 'lode88', 'vnloto',
     'new88', 'bet88', 'thabet', 'kubet', 'okvip', 'rikvip',
+    'ea88', 'kuwin', 'sh88', '88sh',
+    'b52', 'v8', '8us', 'vb777', 'go88', 'choangclub', 'xhuclub', 'zclub',
+    '68kb', '68gb', '6623', 'sunvn', 'bigboss', 'bigboos',
 }
 
 _GAMBLING_PATTERNS = [
-    _re.compile(r'\b[a-z]{2,4}\d{2,3}\b'),
+    _re.compile(r'\b[a-z]{1,4}\d{2,3}\b'),   # b52, sh88, v8
+    _re.compile(r'\b\d{2,3}[a-z]{1,4}\b'),   # 88k, 68gb, 99ok
     _re.compile(r'(bet|win|tai\s*xiu|nohu|casino|slot|game\s*bai)'),
     _re.compile(r'(b[e3]t|w[i1]n|t[a4]i\s*x[i1]u|n[o0]h[u4])'),
     _re.compile(r'\b\w{2,10}\d{2,3}\.(com|net|vip|cc|io)\b'),
@@ -507,8 +525,81 @@ def _clean_profile_url(href: str):
         return None
 
 
+_REVIEW_PATH = Path(__file__).parent / 'review_queue.txt'
+
+# ── Score Engine ──────────────────────────────────────────────────────────────
+# Threshold: ≥70 → BLOCK | 40-69 → REVIEW | <40 → SKIP
+SCORE_BLOCK  = 70
+SCORE_REVIEW = 40
+
+_NAME_OBFUSCATED = _re.compile(
+    r'(?i)([a-z]{1,4}[\.\-\_\s]+\d{2,3}|\d{2,3}[\.\-\_\s]+[a-z]{1,4})'  # sh-88, 88.sh
+    r'|([a-z]{1,4}\d{2,3}[a-z]{0,4})'                                       # sh88, aa88bet
+)
+_LOW_FOLLOWER = _re.compile(r'\b([0-9]{1,3})\s*(người theo dõi|followers)\b')
+
+
+def _score_profile(
+    name: str, card: str, url: str,
+    f1: bool, f2: bool,
+    matched_signals: list[str], bio_signals,
+    match_pattern: str,
+) -> tuple[int, list[str]]:
+    """Trả về (score, reasons[])."""
+    reasons: list[str] = []
+    score = 0
+
+    # Gambling blacklist → block ngay, không cần tính thêm
+    if is_gambling(name):
+        return 100, ['gambling_blacklist']
+
+    # F1 name match
+    if f1:
+        score += 50
+        reasons.append('f1+50')
+
+    # F2 bio signals
+    for sig in matched_signals:
+        pts = 20 if ' ' in sig else 10
+        score += pts
+        reasons.append(f'sig"{sig}"+{pts}')
+
+    # URL slug chứa keyword
+    if _slug_has(url, match_pattern):
+        score += 30
+        reasons.append('slug+30')
+
+    # Tên có pattern obfuscate (sh-88, 88.aa...)
+    name_c = _compact(name)
+    if _NAME_OBFUSCATED.search(name) or _NAME_OBFUSCATED.search(name_c):
+        score += 10
+        reasons.append('obfuscated_name+10')
+
+    # Follower thấp (<200)
+    m = _LOW_FOLLOWER.search(card)
+    if m and int(m.group(1)) < 200:
+        score += 5
+        reasons.append(f'low_follower({m.group(1)})+5')
+
+    return min(score, 100), reasons
+
+
+def _append_review(search_kw: str, name: str, url: str, card: str,
+                   score: int, reasons: list[str],
+                   f1_why: str, matched: int, total: int) -> None:
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M')
+    card_safe = card.replace('\n', ' ')[:180]
+    reason_str = ', '.join(reasons) if reasons else 'none'
+    line = (f'[{ts}] score={score} | kw="{search_kw}" | name="{name}" | url={url}'
+            f' | f2={matched}/{total} | f1={f1_why} | reasons=[{reason_str}]'
+            f' | card="{card_safe}"\n')
+    with _REVIEW_PATH.open('a', encoding='utf-8') as fh:
+        fh.write(line)
+
+
 async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
-                           bio_signals: frozenset = frozenset()) -> list[str]:
+                           bio_signals: frozenset = frozenset(),
+                           search_kw: str = '') -> list[str]:
     try:
         await page.wait_for_selector('[role="feed"]', timeout=15000)
     except Exception:
@@ -573,35 +664,56 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
 
         f1 = name_f1 or is_gambling(p['name']) or _slug_has(p['url'], match_pattern)
         f2 = (not f1) and _bio_match(p['card'], bio_signals)
-        if f1:
-            tag = '[F1]'
-        elif f2:
-            tag = '[F2]'
+
+        # ── Score Engine ─────────────────────────────────────────────────
+        text_l = _to_searchable(p['card'])
+        matched_signals = [s for s in bio_signals if s in text_l]
+        score, score_reasons = _score_profile(
+            p['name'], p['card'], p['url'],
+            f1, f2, matched_signals, bio_signals, match_pattern,
+        )
+
+        if score >= SCORE_BLOCK:
+            tag = '[F1]' if f1 else '[F2]'
+        elif score >= SCORE_REVIEW:
+            tag = '[REVIEW]'
         else:
             tag = '[SKIP]'
-            card_preview = p['card'][:120].replace('\n', ' ') if p['card'] else '<empty>'
-            # F1 reason
-            if required_terms or optional_terms:
-                req_fail = [t for t in required_terms if t not in name_l and _compact(t) not in name_c]
-                opt_miss_name = [t for t in optional_terms if t not in name_l] if optional_terms else []
-                opt_miss_card = [t for t in optional_terms if t not in card_l] if optional_terms else []
-                if req_fail:
-                    f1_why = f'thiếu required={req_fail[:3]}'
-                elif opt_miss_name and len(opt_miss_name) == len(optional_terms):
-                    f1_why = f'optional không có trong tên lẫn card'
-                else:
-                    f1_why = 'F1 fail'
+
+        card_preview = p['card'][:120].replace('\n', ' ') if p['card'] else '<empty>'
+
+        # F1 reason (dùng cho log + review)
+        if required_terms or optional_terms:
+            req_fail = [t for t in required_terms if t not in name_l and _compact(t) not in name_c]
+            if req_fail:
+                f1_why = f'thiếu required={req_fail[:3]}'
+            elif all(t not in name_l for t in optional_terms) and all(t not in card_l for t in optional_terms):
+                f1_why = 'optional không có trong tên lẫn card'
             else:
-                f1_why = f'fallback miss: {[w for w in parse_keyword(match_pattern)[2] if w not in name_l]}'
-            # F2 reason
-            text_l = _to_searchable(p['card'])
-            matched_signals = [s for s in bio_signals if s in text_l]
-            f2_why = f'bio {len(matched_signals)}/{len(bio_signals)} signal' if bio_signals else 'no bio_signals'
-            print(f'    {tag} "{p["name"][:55]}"')
-            print(f'           F1: {f1_why} | F2: {f2_why}')
-            print(f'           card="{card_preview}"')
-        if f1 or f2:
-            print(f'    {tag} "{p["name"][:55]}"')
+                f1_why = 'F1 fail'
+        else:
+            f1_why = f'fallback miss: {[w for w in parse_keyword(match_pattern)[2] if w not in name_l]}'
+        f2_why = f'bio {len(matched_signals)}/{len(bio_signals)} signal' if bio_signals else 'no bio_signals'
+
+        if tag in ('[REVIEW]', '[SKIP]'):
+            _append_review(search_kw, p['name'], p['url'], card_preview,
+                           score, score_reasons, f1_why, len(matched_signals), len(bio_signals))
+
+        if _JSON_MODE:
+            _jout({'event': 'profile',
+                   'filter': tag.strip('[]'),
+                   'name': p['name'], 'id': p.get('id', ''),
+                   'url': p['url'], 'card': card_preview,
+                   'score': score,
+                   'reason': f'F1: {f1_why} | F2: {f2_why}',
+                   'signals': matched_signals})
+        else:
+            print(f'    {tag} "{p["name"][:55]}"  score={score}')
+            if tag in ('[SKIP]', '[REVIEW]'):
+                print(f'           F1: {f1_why} | F2: {f2_why} | reasons={score_reasons}')
+                if tag == '[REVIEW]':
+                    print(f'           card="{card_preview}"')
+        if score >= SCORE_BLOCK:
             result.append(p['url'])
     return result
 
@@ -870,16 +982,23 @@ async def main(keyword_file: str, mode: str, delay: int):
         async def cooldown(minutes: int):
             end = time.time() + minutes * 60
             log(entries, 'info', f'Nghỉ {minutes} phút (đến {datetime.fromtimestamp(end).strftime("%H:%M:%S")})...')
+            if _JSON_MODE:
+                _jout({'event': 'cooldown', 'total_seconds': int(minutes * 60),
+                       'remaining': int(minutes * 60), 'until': datetime.fromtimestamp(end).strftime('%H:%M:%S')})
             try:
                 while True:
                     left = end - time.time()
                     if left <= 0:
                         break
-                    await asyncio.sleep(min(60, left))
+                    await asyncio.sleep(min(30, left))
                     left2 = end - time.time()
                     if left2 > 0:
                         log(entries, 'info', f'  còn {int(left2 // 60)}p{int(left2 % 60):02d}s...')
+                        if _JSON_MODE:
+                            _jout({'event': 'cooldown_tick', 'remaining': int(left2)})
             except asyncio.CancelledError:
+                if _JSON_MODE:
+                    _jout({'event': 'cooldown_tick', 'remaining': 0})
                 raise
 
         async def human_pause():
@@ -1018,6 +1137,9 @@ async def main(keyword_file: str, mode: str, delay: int):
 
             search_kw, match_pattern = split_line(line)
             log(entries, 'info', f'[{ki+1}/{len(keywords)}] Tìm: "{search_kw}" | lọc: "{match_pattern}"')
+            if _JSON_MODE:
+                _jout({'event': 'progress', 'ki': ki + 1, 'total': len(keywords),
+                       'current_kw': search_kw, 'blocked': blocked_total, 'skipped': skipped_total})
 
             await human_pause()
 
@@ -1027,7 +1149,7 @@ async def main(keyword_file: str, mode: str, delay: int):
                     wait_until='domcontentloaded', timeout=20000,
                 )
                 await human_pause()
-                profiles = await extract_profiles(page, match_pattern, mode, bio_signals)
+                profiles = await extract_profiles(page, match_pattern, mode, bio_signals, search_kw)
             except Exception as e:
                 log(entries, 'error', f'Lỗi search "{search_kw}": {e}')
                 continue
@@ -1056,6 +1178,9 @@ async def main(keyword_file: str, mode: str, delay: int):
                     consecutive_errors = 0
                     actions_in_batch += 1
                     log(entries, 'blocked', f'Đã chặn [{search_kw}] {url}')
+                    if _JSON_MODE:
+                        _jout({'event': 'blocked', 'url': url, 'kw': search_kw,
+                               'blocked': blocked_total, 'skipped': skipped_total})
                 else:
                     skipped_total += 1
                     if result == 'session_expired':
@@ -1066,6 +1191,9 @@ async def main(keyword_file: str, mode: str, delay: int):
                     if result in ('session_expired', 'no_more_btn'):
                         consecutive_errors += 1
                     log(entries, 'skip', f'Bỏ qua [{search_kw}] {url} — {result}')
+                    if _JSON_MODE:
+                        _jout({'event': 'block_skip', 'url': url, 'reason': result,
+                               'blocked': blocked_total, 'skipped': skipped_total})
 
                 if actions_in_batch >= batch_size:
                     batch_count += 1
@@ -1135,6 +1263,8 @@ if __name__ == '__main__':
             _mode = _a
         elif _a.isdigit():
             _delay = int(_a)
+        elif _a == '--json':
+            pass  # đã xử lý ở đầu file
 
     try:
         asyncio.run(main(sys.argv[1], _mode, _delay))
