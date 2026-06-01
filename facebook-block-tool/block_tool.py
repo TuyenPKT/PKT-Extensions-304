@@ -152,7 +152,15 @@ def name_matches(name: str, match_pattern: str) -> bool:
         req_c = all(_compact(t) in name_c for t in required) if required else True
         opt_c = any(_compact(t) in name_c for t in optional) if optional else True
         return req_c and opt_c
-    return bool(fallback) and all(w in name_l for w in fallback)
+    if not fallback:
+        return False
+    # Tách tên thành tokens — tránh substring: "xi" ↔ "toxi", "ban" ↔ "banca"
+    _toks = set(t for t in _re.split(r'[\s\-_./\\|,;:!?()\[\]{}\'\"]+', name_l) if t)
+    if all(w in _toks for w in fallback):
+        return True
+    # Accent-insensitive token: 'Ty Le Keo' ↔ 'tỷ lệ kèo' (giữ word boundary)
+    _nd_toks = set(_strip_diacritics(t) for t in _toks)
+    return all(_strip_diacritics(w) in _nd_toks for w in fallback)
 
 
 # ── Auto-detect gambling/scam ──────────────────────────────────────────────────
@@ -529,8 +537,8 @@ _REVIEW_PATH = Path(__file__).parent / 'review_queue.txt'
 
 # ── Score Engine ──────────────────────────────────────────────────────────────
 # Threshold: ≥70 → BLOCK | 40-69 → REVIEW | <40 → SKIP
-SCORE_BLOCK  = 70
-SCORE_REVIEW = 40
+SCORE_BLOCK  = 50
+SCORE_REVIEW = 30
 
 _NAME_OBFUSCATED = _re.compile(
     r'(?i)([a-z]{1,4}[\.\-\_\s]+\d{2,3}|\d{2,3}[\.\-\_\s]+[a-z]{1,4})'  # sh-88, 88.sh
@@ -692,10 +700,11 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
             else:
                 f1_why = 'F1 fail'
         else:
-            f1_why = f'fallback miss: {[w for w in parse_keyword(match_pattern)[2] if w not in name_l]}'
+            _fb_words = parse_keyword(match_pattern)[2]
+            f1_why = f'fallback miss: {[w for w in _fb_words if w not in name_l]}'
         f2_why = f'bio {len(matched_signals)}/{len(bio_signals)} signal' if bio_signals else 'no bio_signals'
 
-        if tag in ('[REVIEW]', '[SKIP]'):
+        if tag == '[REVIEW]':
             _append_review(search_kw, p['name'], p['url'], card_preview,
                            score, score_reasons, f1_why, len(matched_signals), len(bio_signals))
 
