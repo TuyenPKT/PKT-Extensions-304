@@ -91,6 +91,12 @@ export default function App() {
     return () => { subs.forEach(p => p.then(f => f())); };
   }, [pushLog]);
 
+  // ── Auto-start khi app bật ───────────────────────────────────────────────
+  useEffect(() => {
+    handleStart();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Actions ───────────────────────────────────────────────────────────────
   async function handleLoadFile() {
     try {

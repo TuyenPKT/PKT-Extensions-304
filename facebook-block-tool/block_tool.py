@@ -213,6 +213,7 @@ def _to_searchable(s: str) -> str:
 
 
 def _strip_diacritics(s: str) -> str:
+    s = s.replace('đ', 'd').replace('Đ', 'D')
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
 
@@ -234,7 +235,7 @@ _GAMBLING_BLACKLIST = {
     'open88', 'nohu52', 'sunwin', 'go88', 'web88', 'vi68',
     'bk88', 'v9bet', 'fi88', 'f8bet', 'st666', 'loto188', 'lode88', 'vnloto',
     'new88', 'bet88', 'thabet', 'kubet', 'okvip', 'rikvip',
-    'ea88', 'kuwin', 'sh88', '88sh',
+    'ea88', 'kuwin', 'sh88', '88sh', 'fu88', '68vip',
     'b52', 'v8', '8us', 'vb777', 'go88', 'choangclub', 'xhuclub', 'zclub',
     '68kb', '68gb', '6623', 'sunvn', 'bigboss', 'bigboos',
 }
@@ -566,9 +567,10 @@ def _score_profile(
         score += 50
         reasons.append('f1+50')
 
-    # F2 bio signals
+    # F2 bio signals — 3+ từ = signal rất đặc thù → +50 (block ngay)
     for sig in matched_signals:
-        pts = 20 if ' ' in sig else 10
+        words = sig.split()
+        pts = 50 if len(words) >= 3 else (20 if len(words) == 2 else 10)
         score += pts
         reasons.append(f'sig"{sig}"+{pts}')
 
@@ -663,10 +665,8 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
             req_ok = all(_term_in(t, name_l) for t in required_terms) if required_terms else True
             req_c  = all(_compact(t) in name_c for t in required_terms) if required_terms else True
             name_req = req_ok or req_c
-            # optional: đủ nếu có trong tên HOẶC trong card description
-            opt_in_name = any(_term_in(t, name_l) for t in optional_terms) if optional_terms else True
-            opt_in_card = any(_term_in(t, card_l) for t in optional_terms) if optional_terms else False
-            name_f1 = name_req and (opt_in_name or opt_in_card)
+            # F1: required khớp tên là đủ để block — optional chỉ dùng cho F2 scoring
+            name_f1 = name_req
         else:
             name_f1 = name_matches(p['name'], match_pattern)
 
@@ -704,7 +704,7 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
             f1_why = f'fallback miss: {[w for w in _fb_words if w not in name_l]}'
         f2_why = f'bio {len(matched_signals)}/{len(bio_signals)} signal' if bio_signals else 'no bio_signals'
 
-        if tag == '[REVIEW]':
+        if tag in ('[REVIEW]', '[SKIP]'):
             _append_review(search_kw, p['name'], p['url'], card_preview,
                            score, score_reasons, f1_why, len(matched_signals), len(bio_signals))
 
