@@ -1,0 +1,3 @@
+# Token whitelist — token có dấu trong list này không được dùng làm bằng chứng
+# match ở layer accent-insensitive (1 token / dòng, lowercase)
+kẹo

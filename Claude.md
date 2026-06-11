@@ -61,3 +61,17 @@ fn init_repo(cfg: &Config) -> Result<UserRepo> {
 ### Breaking / Gotcha
 - Ghi nếu có
 ```
+
+## Agent skills
+
+### Issue tracker
+
+Issues track trên GitHub Issues (repo TuyenPKT/PKT-Extensions-304, dùng `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+5 label mặc định: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — CONTEXT.md ở root + docs/adr/. See `docs/agents/domain.md`.

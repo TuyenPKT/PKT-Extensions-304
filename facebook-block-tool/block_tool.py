@@ -4,6 +4,7 @@ PKT Facebook Block Tool
 Đọc file từ khoá → tìm người → chặn tự động
 Usage: python block_tool.py keywords.txt [pages|people] [delay_giây]
 """
+from __future__ import annotations
 
 import asyncio
 import csv
@@ -15,6 +16,7 @@ import sys
 import threading
 import time
 import unicodedata
+import functools as _functools
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
@@ -124,6 +126,7 @@ def _term_in(term: str, text: str) -> bool:
     return not after or after[0] == ' ' or (after[0] == '.' and len(after) > 1 and after[1].isdigit())
 
 
+@_functools.lru_cache(maxsize=4096)
 def parse_keyword(match_pattern: str):
     """required: cụm "" — ALL phải có.
     optional: cụm '' — ít nhất 1 phải có.
@@ -155,12 +158,32 @@ def name_matches(name: str, match_pattern: str) -> bool:
     if not fallback:
         return False
     # Tách tên thành tokens — tránh substring: "xi" ↔ "toxi", "ban" ↔ "banca"
-    _toks = set(t for t in _re.split(r'[\s\-_./\\|,;:!?()\[\]{}\'\"]+', name_l) if t)
+    _toks = set(t for t in _re.split(r'[\s\-_./\\|,;:!?&()\[\]{}\'\"]+', name_l) if t)
+    # Collapse obfuscated intra-word dots: "co.de"→"code", "l.ô.đ.ề"→"lôđề"
+    _name_nodot = _re.sub(r'(?<=[^\s])\.(?=[^\s])', '', name_l)
+    if _name_nodot != name_l:
+        _toks |= set(t for t in _re.split(r'[\s\-_&()\[\]{}\'\"]+', _name_nodot) if t)
     if all(w in _toks for w in fallback):
         return True
     # Accent-insensitive token: 'Ty Le Keo' ↔ 'tỷ lệ kèo' (giữ word boundary)
-    _nd_toks = set(_strip_diacritics(t) for t in _toks)
-    return all(_strip_diacritics(w) in _nd_toks for w in fallback)
+    # Token trong whitelist (vd 'kẹo') bị loại — không làm bằng chứng cho 'kèo'
+    _nd_toks = set(_strip_diacritics(t) for t in _toks if t not in _WHITELIST)
+    if all(_strip_diacritics(w) in _nd_toks for w in fallback):
+        return True
+    # Compact substring (chỉ khi có dot-collapse): 'l.ô.đ.ề'→'lôđề'→compact='lode'
+    # mỗi fallback token compact phải là substring của compact name_nodot
+    if _name_nodot != name_l:
+        _nc = _compact(_name_nodot)
+        if all(_compact(w) in _nc for w in fallback):
+            return True
+    # Compact toàn keyword vs compact name: 'ca cuoc' ↔ 'Cacuoc thethao'
+    # Guard ≥5 ký tự — keyword ngắn sau compact ('lode') dễ dính từ vô can
+    # Bỏ token whitelist khỏi name trước khi compact ('kẹo bóng' không thành 'keobong')
+    kw_c = _compact(match_pattern)
+    _name_wl = ' '.join(t for t in name_l.split() if t not in _WHITELIST) if _WHITELIST else name_l
+    if len(kw_c) >= 5 and kw_c in _compact(_name_wl):
+        return True
+    return False
 
 
 # ── Auto-detect gambling/scam ──────────────────────────────────────────────────
@@ -224,6 +247,31 @@ def _strip_diacritics(s: str) -> str:
 def _compact(s: str) -> str:
     """Strip diacritics + xóa space/punct + lower — để 'nổ hũ 52' ↔ 'nohu52', 'hi-88' ↔ 'hi88'."""
     return _re.sub(r'[^a-z0-9]', '', _strip_diacritics(s).lower())
+
+
+def _load_whitelist() -> set[str]:
+    """Token whitelist: token có dấu nằm trong list này không được dùng làm
+    bằng chứng match ở các layer accent-insensitive (vd 'kẹo' vs 'kèo' cùng strip về 'keo')."""
+    p = Path(__file__).parent / 'whitelist.txt'
+    try:
+        return {nfc(l.strip().lower()) for l in p.read_text(encoding='utf-8').splitlines()
+                if l.strip() and not l.startswith('#')}
+    except FileNotFoundError:
+        return set()
+
+_WHITELIST = _load_whitelist()
+
+# Toàn bộ match patterns đã load — dùng cross-check khi miss F1 với search kw hiện tại
+# (page "Soi Cầu Nhất.Vip" xuất hiện khi search "68vip" vẫn phải match kw "Soi cầu")
+_ALL_PATTERNS: list[str] = []
+
+
+def _cross_match(name: str, url: str) -> str | None:
+    """Check tên + URL slug với TOÀN BỘ keyword list. Trả về pattern match đầu tiên."""
+    for mp in _ALL_PATTERNS:
+        if name_matches(name, mp) or _slug_has(url, mp):
+            return mp
+    return None
 
 
 def _normalize_detect(s: str) -> str:
@@ -506,15 +554,17 @@ def _bio_match(card_text: str, signals: frozenset, threshold: int = 2) -> bool:
 
 
 def _slug_has(url: str, match_pattern: str) -> bool:
-    """Check URL slug chứa required terms (compact) — bắt page slug ASCII như nohu52net."""
+    """Check URL slug chứa keyword (compact) — bắt page slug ASCII như nohu52net, Kingking89win."""
     if 'profile.php' in url:
         return False
     from urllib.parse import urlparse
     slug = urlparse(url).path.strip('/').lower()
     required, _, _ = parse_keyword(match_pattern)
-    if not required:
-        return False
-    return all(_compact(t) in slug for t in required)
+    if required:
+        return all(_compact(t) in slug for t in required)
+    # Plain keyword: compact toàn bộ, guard ≥5 chống FP keyword ngắn
+    kw_c = _compact(match_pattern)
+    return len(kw_c) >= 5 and kw_c in _compact(slug)
 
 
 def _clean_profile_url(href: str):
@@ -675,6 +725,11 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
             name_f1 = name_matches(p['name'], match_pattern)
 
         f1 = name_f1 or is_gambling(p['name']) or _slug_has(p['url'], match_pattern)
+        cross_mp = None
+        if not f1:
+            cross_mp = _cross_match(p['name'], p['url'])
+            if cross_mp:
+                f1 = True
         f2 = (not f1) and _bio_match(p['card'], bio_signals)
 
         # ── Score Engine ─────────────────────────────────────────────────
@@ -695,7 +750,9 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
         card_preview = p['card'][:120].replace('\n', ' ') if p['card'] else '<empty>'
 
         # F1 reason (dùng cho log + review)
-        if required_terms or optional_terms:
+        if cross_mp:
+            f1_why = f'cross-match "{cross_mp[:40]}"'
+        elif required_terms or optional_terms:
             req_fail = [t for t in required_terms if t not in name_l and _compact(t) not in name_c]
             if req_fail:
                 f1_why = f'thiếu required={req_fail[:3]}'
@@ -865,6 +922,9 @@ async def main(keyword_file: str, mode: str, delay: int):
         if not keywords:
             print('File từ khoá rỗng.')
             return
+        _ALL_PATTERNS.clear()
+        _ALL_PATTERNS.extend(split_line(l)[1] for l in keywords)
+        print(f'[init] Cross-check: {len(_ALL_PATTERNS)} patterns')
 
     bio_signals = _load_bio_signals(kw_path) if mode != 'direct' else frozenset()
     if bio_signals:
