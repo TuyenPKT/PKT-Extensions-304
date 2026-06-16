@@ -1,0 +1,33 @@
+- generic [ref=e5]:
+  - banner:
+    - generic [ref=e8]:
+      - generic [ref=e10]:
+        - generic:
+          - button [disabled]:
+            - img
+        - button "Facebook" [ref=e12] [cursor=pointer]:
+          - img "Facebook" [ref=e13]
+      - generic [ref=e18]:
+        - textbox "Email hoặc điện thoại" [ref=e21]
+        - textbox "Mật khẩu" [ref=e24]
+        - button "Đăng nhập" [ref=e27] [cursor=pointer]:
+          - generic [ref=e31]: Đăng nhập
+        - link "Bạn quên tài khoản ư?" [ref=e34] [cursor=pointer]:
+          - /url: https://www.facebook.com/recover/initiate?ars=royal_blue_bar
+  - main [ref=e40]:
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - img [ref=e44]
+        - generic [ref=e53]:
+          - heading "Bạn hiện không xem được nội dung này" [level=2] [ref=e55]:
+            - generic [ref=e56]: Bạn hiện không xem được nội dung này
+          - generic [ref=e58]: Lỗi này thường do chủ sở hữu chỉ chia sẻ nội dung với một nhóm nhỏ, thay đổi người được xem hoặc đã xóa nội dung.
+        - link "Đi đến Bảng feed" [ref=e60] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e63]: Đi đến Bảng feed
+      - generic [ref=e64]:
+        - button "Quay lại" [ref=e65] [cursor=pointer]:
+          - generic [ref=e66]: Quay lại
+        - link "Truy cập Trung tâm trợ giúp" [ref=e68] [cursor=pointer]:
+          - /url: https://www.facebook.com/help
+          - generic [ref=e69]: Truy cập Trung tâm trợ giúp

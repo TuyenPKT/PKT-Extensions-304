@@ -1,0 +1,183 @@
+- generic [ref=e5]:
+  - banner:
+    - generic [ref=e8]:
+      - generic [ref=e10]:
+        - generic:
+          - button [disabled]:
+            - img
+        - button "Facebook" [ref=e12] [cursor=pointer]:
+          - img "Facebook" [ref=e13]
+      - generic [ref=e16]:
+        - button "Đăng nhập bằng mã QR" [ref=e19] [cursor=pointer]:
+          - img [ref=e20]
+        - generic [ref=e23]:
+          - textbox "Email hoặc điện thoại" [ref=e26]
+          - textbox "Mật khẩu" [ref=e29]
+          - button "Đăng nhập" [ref=e32] [cursor=pointer]:
+            - generic [ref=e36]: Đăng nhập
+          - link "Bạn quên tài khoản ư?" [ref=e39] [cursor=pointer]:
+            - /url: https://www.facebook.com/recover/initiate?ars=royal_blue_bar
+  - main [ref=e46]:
+    - generic [ref=e47]:
+      - link [ref=e58] [cursor=pointer]:
+        - /url: https://www.facebook.com/photo/?fbid=1128300400364850&set=a.1128288947032662
+      - generic [ref=e66]:
+        - link [ref=e69] [cursor=pointer]:
+          - /url: https://www.facebook.com/photo/?fbid=1128615600333330&set=a.127311583797075&__tn__=%3C
+          - img [ref=e71]
+        - generic [ref=e77]:
+          - heading [level=1] [ref=e82]: Vé Lộc Phát 6868
+          - generic [ref=e84]:
+            - link [ref=e85] [cursor=pointer]:
+              - /url: https://www.facebook.com/profile.php?id=100095547012442&sk=followers
+              - strong [ref=e86]: "140"
+              - text: người theo dõi
+            - text: •
+            - link [ref=e87] [cursor=pointer]:
+              - /url: https://www.facebook.com/profile.php?id=100095547012442&sk=following
+              - strong [ref=e88]: "0"
+              - text: đang theo dõi
+    - generic [ref=e96]:
+      - tablist [ref=e104]:
+        - generic [ref=e106]:
+          - generic [ref=e107]:
+            - generic [ref=e108]: Xem thêm
+            - img [ref=e110]
+          - tab [selected] [ref=e113] [cursor=pointer]:
+            - generic [ref=e115]: Bài viết
+          - tab [ref=e117] [cursor=pointer]:
+            - generic [ref=e119]: Giới thiệu
+          - tab [ref=e121] [cursor=pointer]:
+            - generic [ref=e123]: Ảnh
+      - button [ref=e127] [cursor=pointer]:
+        - img [ref=e129]
+    - generic [ref=e135]:
+      - generic [ref=e138]:
+        - generic [ref=e142]:
+          - heading [level=2] [ref=e151]:
+            - generic [ref=e153]: Giới thiệu
+          - generic [ref=e154]:
+            - generic [ref=e158]:
+              - text: Liên hệ CSKH
+              - link [ref=e159] [cursor=pointer]:
+                - /url: https://l.facebook.com/l.php?u=https%3A%2F%2Fm.me%2F215965117084519&h=AUDBRBz2klKvOe2IGjBwMvHO-kFg9BlVR8B-rxijK6pST7Sf9Er_fEcaBSqpZmwAnqNlKpP92NTdsRASJQ2XElYZWdzKZRAQO0Di-5v83ANIDohB0XXiDfBYQ6EudSmey15Yp327gTf2AXh-fxd1Lqv4Hg
+                - text: m.me/215965117084519
+            - list [ref=e162]:
+              - button [ref=e170] [cursor=pointer]:
+                - generic [ref=e171]:
+                  - strong [ref=e172]: Trang
+                  - text: · Tỉnh/Thành phố
+              - link [ref=e176] [cursor=pointer]:
+                - /url: https://www.facebook.com/profile.php?id=100095547012442&sk=reviews
+                - generic [ref=e179]:
+                  - text: Chưa xếp hạng (0 lượt đánh giá)
+                  - button [ref=e180]:
+                    - img [ref=e181]
+        - generic [ref=e186]:
+          - generic [ref=e193]:
+            - heading [level=2] [ref=e195]:
+              - link [ref=e198] [cursor=pointer]:
+                - /url: https://www.facebook.com/profile.php?id=100095547012442&sk=photos
+                - text: Ảnh
+            - link [ref=e203] [cursor=pointer]:
+              - /url: https://www.facebook.com/profile.php?id=100095547012442&sk=photos
+              - generic [ref=e204]: Xem tất cả ảnh
+          - generic [ref=e208]:
+            - link [ref=e211] [cursor=pointer]:
+              - /url: /photo/?fbid=1128615600333330&set=pb.100095547012442.-2207520000
+            - link [ref=e216] [cursor=pointer]:
+              - /url: /photo/?fbid=1128300400364850&set=pb.100095547012442.-2207520000
+            - link [ref=e221] [cursor=pointer]:
+              - /url: /photo/?fbid=1128299880364902&set=pb.100095547012442.-2207520000
+        - contentinfo [ref=e224]:
+          - list [ref=e226]:
+            - listitem [ref=e227]:
+              - link [ref=e228] [cursor=pointer]:
+                - /url: /privacy/policy/?entry_point=comet_dropdown
+                - text: Quyền riêng tư
+              - generic [ref=e229]: ·
+            - listitem [ref=e231]:
+              - link [ref=e232] [cursor=pointer]:
+                - /url: /policies?ref=pf
+                - text: Điều khoản
+              - generic [ref=e233]: ·
+            - listitem [ref=e235]:
+              - link [ref=e236] [cursor=pointer]:
+                - /url: /business/
+                - text: Quảng cáo
+              - generic [ref=e237]: ·
+            - listitem [ref=e239]:
+              - link [ref=e240] [cursor=pointer]:
+                - /url: /help/568137493302217
+                - text: Lựa chọn quảng cáo
+                - img [ref=e242]
+              - generic [ref=e245]: ·
+            - listitem [ref=e247]:
+              - link [ref=e248] [cursor=pointer]:
+                - /url: /policies/cookies/
+                - text: Cookie
+              - generic [ref=e249]: ·
+            - listitem [ref=e251]:
+              - button [ref=e252] [cursor=pointer]: Xem thêm
+      - generic [ref=e254]:
+        - article [ref=e261]:
+          - generic [ref=e269]:
+            - generic [ref=e271]:
+              - link [ref=e275] [cursor=pointer]:
+                - /url: https://www.facebook.com/people/V%C3%A9-L%E1%BB%99c-Ph%C3%A1t-6868/100095547012442/?__cft__[0]=AZZoRRtUzd3oKIt35rUVOu8mZMstd3158dL_KQKLbivhTk2u7QhywRTTyhd1zRa-RnWoDl5PrmF9-qST9TedCaNkt34MCYfZK0tfDIBM5L00lOmJreNX1DJV4BiiQsPWTzh4rsQmqE4-oa5Nt3_vkfKqJspYpsS8ZCicECSLXfk-tMR9uluy7ccw_HpWWuwH9d-gKQVp_yk7CJUp3XJ_2sn1&__tn__=%3C%3C%2CP-R
+                - img [ref=e277]
+              - generic [ref=e282]:
+                - heading [level=2] [ref=e286]:
+                  - generic [ref=e289]:
+                    - link [ref=e292] [cursor=pointer]:
+                      - /url: https://www.facebook.com/people/V%C3%A9-L%E1%BB%99c-Ph%C3%A1t-6868/100095547012442/?__cft__[0]=AZZoRRtUzd3oKIt35rUVOu8mZMstd3158dL_KQKLbivhTk2u7QhywRTTyhd1zRa-RnWoDl5PrmF9-qST9TedCaNkt34MCYfZK0tfDIBM5L00lOmJreNX1DJV4BiiQsPWTzh4rsQmqE4-oa5Nt3_vkfKqJspYpsS8ZCicECSLXfk-tMR9uluy7ccw_HpWWuwH9d-gKQVp_yk7CJUp3XJ_2sn1&__tn__=-]C%2CP-R
+                      - text: Vé Lộc Phát 6868
+                    - text: đã cập nhật ảnh đại diện của mình.
+                - generic [ref=e295]:
+                  - link [ref=e299] [cursor=pointer]:
+                    - /url: https://www.facebook.com/permalink.php?story_fbid=1128615600333330&id=100095547012442&substory_index=1466484414966267&__cft__[0]=AZZoRRtUzd3oKIt35rUVOu8mZMstd3158dL_KQKLbivhTk2u7QhywRTTyhd1zRa-RnWoDl5PrmF9-qST9TedCaNkt34MCYfZK0tfDIBM5L00lOmJreNX1DJV4BiiQsPWTzh4rsQmqE4-oa5Nt3_vkfKqJspYpsS8ZCicECSLXfk-tMR9uluy7ccw_HpWWuwH9d-gKQVp_yk7CJUp3XJ_2sn1&__tn__=%2CO%2CP-R
+                    - text: 25 Tháng 4
+                  - generic [ref=e301]: ·
+                  - img [ref=e306]
+            - link [ref=e316] [cursor=pointer]:
+              - /url: https://www.facebook.com/photo/?fbid=1128615600333330&set=a.127311583797075&__cft__[0]=AZZoRRtUzd3oKIt35rUVOu8mZMstd3158dL_KQKLbivhTk2u7QhywRTTyhd1zRa-RnWoDl5PrmF9-qST9TedCaNkt34MCYfZK0tfDIBM5L00lOmJreNX1DJV4BiiQsPWTzh4rsQmqE4-oa5Nt3_vkfKqJspYpsS8ZCicECSLXfk-tMR9uluy7ccw_HpWWuwH9d-gKQVp_yk7CJUp3XJ_2sn1&__tn__=~H-R
+              - img [ref=e318]
+            - generic [ref=e323]:
+              - generic [ref=e326]:
+                - toolbar [ref=e327]:
+                  - button [ref=e332] [cursor=pointer]
+                - generic [ref=e333]: "Tất cả cảm xúc:"
+                - generic [ref=e335]: "1"
+              - generic [ref=e337]:
+                - button [ref=e339] [cursor=pointer]:
+                  - generic [ref=e344]: Thích
+                - button [ref=e346] [cursor=pointer]:
+                  - generic [ref=e351]: Bình luận
+        - generic [ref=e353]:
+          - article [ref=e354]:
+            - status [ref=e355]
+          - article [ref=e367]:
+            - status [ref=e368]
+  - dialog [ref=e388]:
+    - button "Đóng" [ref=e390] [cursor=pointer]
+    - generic [ref=e396]:
+      - generic [ref=e397]:
+        - img [ref=e401]
+        - generic [ref=e407]: Xem thêm từ Vé Lộc Phát 6868
+        - generic [ref=e412]:
+          - generic: Email hoặc số điện thoại
+          - textbox "Email hoặc số điện thoại" [active] [ref=e413]
+        - generic [ref=e418]:
+          - generic: Mật khẩu
+          - textbox "Mật khẩu" [ref=e419]
+        - button "Đăng nhập vào Facebook" [ref=e421] [cursor=pointer]:
+          - generic [ref=e424]: Đăng nhập
+        - link "Quên mật khẩu?" [ref=e426] [cursor=pointer]:
+          - /url: https://www.facebook.com/recover/initiate?ars=royal_blue_bar
+          - generic [ref=e427]: Quên mật khẩu?
+        - generic [ref=e433]: hoặc
+        - button "Tạo tài khoản mới" [ref=e437] [cursor=pointer]:
+          - generic [ref=e440]: Tạo tài khoản mới
+      - generic [ref=e447]:
+        - generic [ref=e448]: Quét mã QR và xác nhận các mã khớp nhau để đăng nhập.
+        - generic [ref=e450]: IAY-CYR-KUXQ

@@ -249,17 +249,27 @@ def _compact(s: str) -> str:
     return _re.sub(r'[^a-z0-9]', '', _strip_diacritics(s).lower())
 
 
-def _load_whitelist() -> set[str]:
-    """Token whitelist: token có dấu nằm trong list này không được dùng làm
-    bằng chứng match ở các layer accent-insensitive (vd 'kẹo' vs 'kèo' cùng strip về 'keo')."""
+def _load_whitelist() -> tuple[set[str], set[str]]:
+    """Đọc whitelist.txt → (token_set, exclusion_set).
+    - Dòng thường: token whitelist cho accent-insensitive layer.
+    - Dòng prefix '!': page exclusion — nếu name/card chứa term → SKIP dù match keyword."""
     p = Path(__file__).parent / 'whitelist.txt'
+    tokens: set[str] = set()
+    exclusions: set[str] = set()
     try:
-        return {nfc(l.strip().lower()) for l in p.read_text(encoding='utf-8').splitlines()
-                if l.strip() and not l.startswith('#')}
+        for l in p.read_text(encoding='utf-8').splitlines():
+            l = l.strip()
+            if not l or l.startswith('#'):
+                continue
+            if l.startswith('!'):
+                exclusions.add(nfc(l[1:].strip().lower()))
+            else:
+                tokens.add(nfc(l.lower()))
     except FileNotFoundError:
-        return set()
+        pass
+    return tokens, exclusions
 
-_WHITELIST = _load_whitelist()
+_WHITELIST, _PAGE_EXCLUSIONS = _load_whitelist()
 
 # Toàn bộ match patterns đã load — dùng cross-check khi miss F1 với search kw hiện tại
 # (page "Soi Cầu Nhất.Vip" xuất hiện khi search "68vip" vẫn phải match kw "Soi cầu")
@@ -739,6 +749,15 @@ async def extract_profiles(page, match_pattern: str, mode: str = 'pages',
             p['name'], p['card'], p['url'],
             f1, f2, matched_signals, bio_signals, match_pattern,
         )
+
+        # Page exclusion whitelist — chỉ skip khi không có casino signal kèm theo
+        # "Vietlott thật" → skip, nhưng "Vietlott 100% win" có signals → vẫn BLOCK
+        if _PAGE_EXCLUSIONS and not matched_signals and not f2:
+            _combined = (name_l + ' ' + card_l).lower()
+            if any(exc in _combined for exc in _PAGE_EXCLUSIONS):
+                if not _JSON_MODE:
+                    print(f'    [SKIP] "{p["name"][:55]}"  excluded by whitelist')
+                continue
 
         if score >= SCORE_BLOCK:
             tag = '[F1]' if f1 else '[F2]'

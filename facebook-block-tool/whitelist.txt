@@ -1,3 +1,9 @@
 # Token whitelist — token có dấu trong list này không được dùng làm bằng chứng
 # match ở layer accent-insensitive (1 token / dòng, lowercase)
 kẹo
+
+# Page exclusion — prefix ! — nếu name hoặc card chứa term này → SKIP dù match keyword
+!vietlott
+!xổ số kiến thiết
+!công ty xổ số
+!đại lý vé số chính thức
