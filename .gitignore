@@ -29,4 +29,5 @@ Anti.txt
 
 .claude
 
-
+# Playwright MCP session logs
+.playwright-mcp/

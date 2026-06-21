@@ -170,6 +170,12 @@ def name_matches(name: str, match_pattern: str) -> bool:
     _nd_toks = set(_strip_diacritics(t) for t in _toks if t not in _WHITELIST)
     if all(_strip_diacritics(w) in _nd_toks for w in fallback):
         return True
+    # Partial match ≥50% — exact diacritics, keyword ≥3 tokens
+    # "Tín Dụng XXX" → tín+dụng=2/3≥50% MATCH; "tin dùng"/"tự tin"+"đến" → 0/3 MISS
+    if len(fallback) >= 3:
+        matched = sum(1 for w in fallback if w in _toks)
+        if matched * 2 >= len(fallback):
+            return True
     # Compact substring (chỉ khi có dot-collapse): 'l.ô.đ.ề'→'lôđề'→compact='lode'
     # mỗi fallback token compact phải là substring của compact name_nodot
     if _name_nodot != name_l:
@@ -602,8 +608,8 @@ _REVIEW_PATH = Path(__file__).parent / 'review_queue.txt'
 
 # ── Score Engine ──────────────────────────────────────────────────────────────
 # Threshold: ≥70 → BLOCK | 40-69 → REVIEW | <40 → SKIP
-SCORE_BLOCK  = 50
-SCORE_REVIEW = 30
+SCORE_BLOCK  = 35
+SCORE_REVIEW = 20
 
 _NAME_OBFUSCATED = _re.compile(
     r'(?i)([a-z]{1,4}[\.\-\_\s]+\d{2,3}|\d{2,3}[\.\-\_\s]+[a-z]{1,4})'  # sh-88, 88.sh
@@ -643,17 +649,21 @@ def _score_profile(
         score += 30
         reasons.append('slug+30')
 
-    # Tên có pattern obfuscate (sh-88, 88.aa...)
-    name_c = _compact(name)
-    if _NAME_OBFUSCATED.search(name) or _NAME_OBFUSCATED.search(name_c):
-        score += 10
-        reasons.append('obfuscated_name+10')
+    has_real_match = bool(f1 or matched_signals or _slug_has(url, match_pattern))
 
-    # Follower thấp (<200)
-    m = _LOW_FOLLOWER.search(card)
-    if m and int(m.group(1)) < 200:
-        score += 5
-        reasons.append(f'low_follower({m.group(1)})+5')
+    # Tên có pattern obfuscate — chỉ tính khi có match thật
+    if has_real_match:
+        name_c = _compact(name)
+        if _NAME_OBFUSCATED.search(name) or _NAME_OBFUSCATED.search(name_c):
+            score += 10
+            reasons.append('obfuscated_name+10')
+
+    # Follower thấp — chỉ tính khi có match thật
+    if has_real_match:
+        m = _LOW_FOLLOWER.search(card)
+        if m and int(m.group(1)) < 200:
+            score += 5
+            reasons.append(f'low_follower({m.group(1)})+5')
 
     return min(score, 100), reasons
 
